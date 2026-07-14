@@ -4,6 +4,13 @@
     "module": "NodeNext",
     "moduleResolution": "NodeNext",
     "strict": true,
-    "skipLibCheck": true
-  }
+    "skipLibCheck": true,
+    "outDir": "dist"
+  },
+  "exclude": [
+    "dist",
+    "tests",
+    "demo",
+    "vitest.config.ts"
+  ]
 }

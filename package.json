@@ -1,14 +1,17 @@
 {
   "name": "mcp-server",
   "version": "1.0.0",
-  "description": "",
-  "main": "index.js",
+  "description": "A Model Context Protocol server giving LLM agents type-safe read/write access to a local SQLite database",
+  "main": "server.ts",
   "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1"
+    "build": "tsc",
+    "start": "tsx server.ts",
+    "test": "vitest run",
+    "demo": "tsx demo/seed-and-query.ts"
   },
   "keywords": [],
-  "author": "",
-  "license": "ISC",
+  "author": "Anish Jhaveri",
+  "license": "MIT",
   "type": "module",
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.29.0",

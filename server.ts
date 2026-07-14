@@ -4,9 +4,38 @@ import { z } from "zod";
 import sqlite3 from "sqlite3";
 import { fileURLToPath } from "url";
 import path from "path";
+import fs from "fs";
+import dotenv from "dotenv";
+
+// Load configuration
+dotenv.config();
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const dbPath = path.join(__dirname, "mcp_database.db");
+const dbPath = process.env.DB_PATH || path.join(__dirname, "mcp_database.db");
+
+// Validate SQLite database file path is writable/accessible on startup
+if (dbPath !== ":memory:") {
+    try {
+        const resolvedPath = path.resolve(dbPath);
+        const dir = path.dirname(resolvedPath);
+
+        // Ensure directory exists
+        if (!fs.existsSync(dir)) {
+            fs.mkdirSync(dir, { recursive: true });
+        }
+
+        // Check directory write access
+        fs.accessSync(dir, fs.constants.W_OK);
+
+        // If file exists, check file write access
+        if (fs.existsSync(resolvedPath)) {
+            fs.accessSync(resolvedPath, fs.constants.W_OK);
+        }
+    } catch (error) {
+        console.error(`Fatal startup error: SQLite database path '${dbPath}' is not writable/accessible:`, (error as Error).message);
+        process.exit(1);
+    }
+}
 
 // Initialize SQLite database connection
 const db = new sqlite3.Database(dbPath);
@@ -23,10 +52,18 @@ db.serialize(() => {
             detail_one TEXT,
             detail_two TEXT
         )
-    `);
+    `, (err) => {
+        if (err) {
+            console.error("Database schema initialization failed:", err.message);
+        }
+    });
 
     // Seed mock data if the table is completely empty
     db.get("SELECT COUNT(*) as count FROM metrics_and_data", (err: Error | null, row: any) => {
+        if (err) {
+            console.error("Failed to check if database needs seeding:", err.message);
+            return;
+        }
         if (row && row.count === 0) {
             console.error("Log: Seeding SQLite database with initial records...");
             const stmt = db.prepare(`
@@ -46,7 +83,11 @@ db.serialize(() => {
             stmt.run("internal_metrics", "API Response Latency", "Optimized", "Under 8s Target", "7.4s Current");
             stmt.run("internal_metrics", "Token Throughput", "Stable", "94% Efficiency", null);
 
-            stmt.finalize();
+            stmt.finalize((finalizeErr) => {
+                if (finalizeErr) {
+                    console.error("Error finalizing database seeding statements:", finalizeErr.message);
+                }
+            });
         }
     });
 });
@@ -56,7 +97,11 @@ const server = new McpServer({
     version: "1.0.0",
 });
 
-// TOOL 1: Query database records (Read)
+/**
+ * TOOL 1: Query database records (Read)
+ * 
+ * Fetches rows matching a given category/domain.
+ */
 server.tool(
     "query_data_source",
     {
@@ -65,13 +110,21 @@ server.tool(
     async ({ category }) => {
         console.error(`Log: Executing SQL query for category: ${category}`);
 
-        return new Promise((resolve, reject) => {
+        return new Promise((resolve) => {
             db.all(
                 "SELECT key_name, status, detail_one, detail_two FROM metrics_and_data WHERE category = ?",
                 [category],
                 (err: Error | null, rows: any[]) => {
                     if (err) {
-                        return reject(err);
+                        return resolve({
+                            content: [
+                                {
+                                    type: "text",
+                                    text: `Database error querying data source: ${err.message}`,
+                                },
+                            ],
+                            isError: true,
+                        });
                     }
                     resolve({
                         content: [
@@ -87,7 +140,11 @@ server.tool(
     }
 );
 
-// TOOL 2: Add new records to the database (Write!)
+/**
+ * TOOL 2: Add new records to the database (Write!)
+ * 
+ * Inserts a new row into the database with category, key_name, status, and optional details.
+ */
 server.tool(
     "add_database_record",
     {
@@ -100,14 +157,22 @@ server.tool(
     async ({ category, key_name, status, detail_one, detail_two }) => {
         console.error(`Log: Writing new record to database...`);
 
-        return new Promise((resolve, reject) => {
+        return new Promise((resolve) => {
             db.run(
                 `INSERT INTO metrics_and_data (category, key_name, status, detail_one, detail_two) 
                  VALUES (?, ?, ?, ?, ?)`,
                 [category, key_name, status, detail_one || null, detail_two || null],
                 function (this: sqlite3.RunResult, err: Error | null) {
                     if (err) {
-                        return reject(err);
+                        return resolve({
+                            content: [
+                                {
+                                    type: "text",
+                                    text: `Database error adding record: ${err.message}`,
+                                },
+                            ],
+                            isError: true,
+                        });
                     }
                     resolve({
                         content: [
@@ -123,13 +188,70 @@ server.tool(
     }
 );
 
+// NOTE: This relies on undocumented SDK internals (_requestHandlers). This may break silently on SDK version upgrades.
+// If tool error formatting stops working after an SDK bump, check here first.
+const serverInstance = server.server as any;
+const originalCallToolHandler = serverInstance?._requestHandlers?.get
+    ? serverInstance._requestHandlers.get("tools/call")
+    : undefined;
+
+if (originalCallToolHandler) {
+    serverInstance._requestHandlers.set("tools/call", async (request: any, extra: any) => {
+        const result = await originalCallToolHandler(request, extra);
+        if (result && result.isError && result.content && result.content[0] && result.content[0].text) {
+            const text = result.content[0].text;
+            // NOTE: This regex is tightly coupled to the MCP SDK's current error message prefix formatting.
+            // If the SDK changes its error formatting, this regex may silently stop matching and fall back to raw text.
+            const match = text.match(/^(?:MCP error [-\d]+: )?(Input validation error: Invalid arguments for tool [^:]+: )([\s\S]+)$/);
+            if (match) {
+                const rawJson = match[2];
+                try {
+                    const issues = JSON.parse(rawJson);
+                    if (Array.isArray(issues)) {
+                        const formatted = issues.map((issue: any) => {
+                            const path = issue.path.join(".");
+                            const cleanMsg = issue.message.replace(/^Invalid input:\s*/i, "");
+                            if (cleanMsg.toLowerCase() === "required") {
+                                return `Field '${path}' is required`;
+                            }
+                            return `Field '${path}': ${cleanMsg}`;
+                        }).join("; ");
+                        result.content[0].text = `Input validation error: ${formatted}`;
+                    }
+                } catch (e) {
+                    // Ignore JSON parsing errors and return original text
+                }
+            }
+        }
+        return result;
+    });
+} else {
+    console.error("Warning: error-formatting wrapper could not attach because undocumented SDK internals changed. Raw Zod errors will be returned.");
+}
+
+/**
+ * Starts the MCP stdio server transport.
+ */
 async function runServer() {
     const transport = new StdioServerTransport();
     await server.connect(transport);
     console.error("MCP Server running on Stdio with SQLite");
 }
 
-runServer().catch((error) => {
-    console.error("Fatal error starting the MCP server:", error);
-    process.exit(1);
-});
+// Check if run directly
+const isMain = process.argv[1] && (
+    process.argv[1] === fileURLToPath(import.meta.url) ||
+    process.argv[1].endsWith("/server.ts") ||
+    process.argv[1].endsWith("/server.js") ||
+    process.argv[1].endsWith("\\server.ts") ||
+    process.argv[1].endsWith("\\server.js")
+);
+
+if (isMain) {
+    runServer().catch((error) => {
+        console.error("Fatal error starting the MCP server:", error);
+        process.exit(1);
+    });
+}
+
+export { server, db };

@@ -1,4 +1,8 @@
 node_modules/
 dist/
 mcp_database.db
+.env
 .DS_Store
+server.js
+tests/**/*.js
+demo/**/*.js
