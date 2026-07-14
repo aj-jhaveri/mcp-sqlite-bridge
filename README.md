@@ -3,6 +3,7 @@
 [![TypeScript](https://img.shields.io/badge/TypeScript-5.0+-blue.svg?style=flat&logo=typescript&logoColor=white)](https://www.typescriptlang.org/)
 [![Node.js](https://img.shields.io/badge/Node.js->=18-green.svg)](https://nodejs.org/)
 [![Vitest](https://img.shields.io/badge/Vitest-Checked-yellow.svg)](https://vitest.dev/)
+[![CI](https://github.com/aj-jhaveri/mcp-sqlite-bridge/actions/workflows/ci.yml/badge.svg)](https://github.com/aj-jhaveri/mcp-sqlite-bridge/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
 A clean, modular Model Context Protocol (MCP) server that enables AI agents to securely interact with local SQLite databases through type-safe, validated tools. Built with TypeScript, Zod, and Vitest, this server demonstrates modern AI engineering patterns, including agent-friendly error feedback loops and runtime safety controls.
