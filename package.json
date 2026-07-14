@@ -2,10 +2,10 @@
   "name": "mcp-server",
   "version": "1.0.0",
   "description": "A Model Context Protocol server giving LLM agents type-safe read/write access to a local SQLite database",
-  "main": "server.ts",
+  "main": "dist/server.js",
   "scripts": {
     "build": "tsc",
-    "start": "tsx server.ts",
+    "start": "tsx src/server.ts",
     "test": "vitest run",
     "demo": "tsx demo/seed-and-query.ts"
   },

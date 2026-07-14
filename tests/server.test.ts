@@ -3,7 +3,7 @@ import { describe, it, expect, beforeAll } from "vitest";
 // Set isolated database path to in-memory BEFORE importing the server
 process.env.DB_PATH = ":memory:";
 
-import { server, db } from "../server.js";
+import { server, db } from "../src/server.js";
 
 describe("MCP SQLite Bridge Server", () => {
     // Helper to call tools programmatically

@@ -1,223 +1,110 @@
-# Agentic SQLite Data Bridge (MCP Server)
+# Type-safe Model Context Protocol (MCP) SQLite Bridge
 
-![TypeScript](https://img.shields.io/badge/typescript-%23007ACC.svg?style=flat&logo=typescript&logoColor=white)
-![Node.js](https://img.shields.io/badge/node.js-%3E%3D18-green.svg)
-![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)
+[![TypeScript](https://img.shields.io/badge/TypeScript-5.0+-blue.svg?style=flat&logo=typescript&logoColor=white)](https://www.typescriptlang.org/)
+[![Node.js](https://img.shields.io/badge/Node.js->=18-green.svg)](https://nodejs.org/)
+[![Vitest](https://img.shields.io/badge/Vitest-Checked-yellow.svg)](https://vitest.dev/)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
-A Model Context Protocol (MCP) server built in TypeScript and Node.js that enables LLM agents (such as Claude 3.5 Sonnet) to perform secure, type-safe, and real-time read/write operations against a local SQLite database. By bridging foundation models directly to local system environments, this server empowers agents to autonomously execute semantic reasoning, validate query boundaries, and perform CRUD mutations dynamically over a standard stdio transport.
+A clean, modular Model Context Protocol (MCP) server that enables AI agents to securely interact with local SQLite databases through type-safe, validated tools. Built with TypeScript, Zod, and Vitest, this server demonstrates modern AI engineering patterns, including agent-friendly error feedback loops and runtime safety controls.
 
 ---
 
-## Quick Demo
+## Why MCP Matters
 
-Run the standalone demo in 30 seconds to witness the complete tool-calling lifecycle (Read, Create, Update) without having to open Claude Desktop:
+Large Language Models (LLMs) are powerful reasoners but lack access to dynamic, real-time private data. The **Model Context Protocol (MCP)**, open-sourced by Anthropic, establishes a standardized bilateral protocol enabling AI agents to interact with data sources, local filesystems, and developer environments. 
 
+Rather than engineering monolithic API integrations for every custom application, developers expose resources and tools via MCP. Standardized clients (such as Claude Desktop) instantly discover these tools, enabling agents to retrieve context, call functions, and inspect system environments dynamically, safely, and locally.
+
+---
+
+## Architecture
+
+This project implements a modular, layered architecture to decouple transport protocols, parameter validations, and SQL transaction executions.
+
+```mermaid
+graph TD
+    Client[AI Client e.g., Claude Desktop] <-->|JSON-RPC 2.0 over Stdio| Transport[Stdio Transport]
+    Transport <-->|MCP Protocol SDK| Server[MCP Server Router]
+    Server <-->|Error Formatter Middleware| Middleware[Error Handler]
+    Server <-->|Zod Schema Validation| Schemas[Validation Layer]
+    Schemas <-->|Resolved Parameters| Handlers[Tool Handlers]
+    Handlers <-->|Parameterized Query| Database[(SQLite: mcp_database.db)]
+```
+
+### Request Flow
+1. **AI Client:** Issues a `tools/call` RPC command over standard input (`stdin`).
+2. **MCP Protocol Layer:** Decodes the JSON-RPC payload and routes the parameters to the registered tool schema.
+3. **Validation Layer:** Evaluates the parameters against strict Zod definitions. 
+4. **Error Interceptor:** If validation fails, custom middleware interceptor cleans and compiles Zod issues into flat, readable error strings.
+5. **Tool Handlers:** Receives validated TypeScript objects, executes parameterized queries against SQLite, and packages data into the standard MCP payload format.
+6. **SQLite Driver:** Fetches records or commits updates to the database safely, keeping operations isolated.
+
+---
+
+## Available Tools
+
+The server exposes the following tools depending on the current permission scope configuration:
+
+| Tool Name | Operation | Parameters | Description |
+| :--- | :--- | :--- | :--- |
+| `query_data_source` | **Read** | `category: string` | Retrieves records matching the requested category/domain (e.g. `headcount`, `internal_metrics`). |
+| `add_database_record` | **Create** | `category`, `key_name`, `status`, `detail_one?`, `detail_two?` | Inserts a new record into the database table. *(Disabled in read-only mode)* |
+| `update_database_record` | **Update** | `id`, `category?`, `key_name?`, `status?`, `detail_one?`, `detail_two?` | Modifies an existing database row by its unique ID. *(Disabled in read-only mode)* |
+
+---
+
+## Agent Feedback Loop (Self-Correction)
+
+Standard tool schemas often return raw Zod schema validation errors containing complex JSON arrays. When sent to an AI agent, this raw format causes confusion and increases conversational drift.
+
+This server intercepts validation errors and formats them into clean, human-readable strings:
+
+```text
+Input validation error: Field 'category': expected string, received number; Field 'status': expected string, received undefined
+```
+
+When the LLM client receives this feedback, it identifies exactly which fields were invalid or missing and automatically corrects them in the subsequent turn without requiring user intervention.
+
+---
+
+## Security Model
+
+Security is paramount when exposing data stores to autonomous agent operations:
+
+1. **SQL Injection Prevention:** Every query in the handlers is fully parameterized. Handlers bind raw client values strictly using SQLite parameter bindings (`?`), preventing malicious payloads from altering the SQL statement structure.
+2. **Access Control (READ_ONLY Mode):** The server supports a configurable read-only safety boundary. When enabled, mutation tools (`add_database_record`, `update_database_record`) are not registered or exposed.
+3. **Local Sovereignty:** By operating entirely over `StdioServerTransport` on the local loop, the server prevents remote data leaks and respects host permission boundaries.
+
+---
+
+## Development
+
+### 1. Installation
+Install dependencies:
 ```bash
 npm install
+```
+
+### 2. Configuration
+Configure your database path and permissions in a local `.env` file:
+```env
+DB_PATH=mcp_database.db
+READ_ONLY=false
+```
+
+### 3. Build & Run
+Compile TypeScript sources to JavaScript:
+```bash
+npm run build
+```
+
+Run a standalone demo demonstrating tool querying, adding, and updating programmatically:
+```bash
 npm run demo
 ```
 
-### Expected Output
-```text
-=========================================
-      MCP SQLite Bridge Standalone Demo   
-=========================================
-
---- Initial Query ---
-Querying 'headcount' category records...
-
-Log: Executing SQL query for category: headcount
-Result:
-[
-  {
-    "key_name": "Full Stack Software Engineer",
-    "status": "Sourcing",
-    "detail_one": "2 Allocations",
-    "detail_two": "ENG-2026-Q3"
-  },
-  {
-    "key_name": "Frontend Developer",
-    "status": "Interviewing",
-    "detail_one": "1 Allocation",
-    "detail_two": null
-  }
-]
-
-
---- Adding Record ---
-Adding a new headcount record for 'Frontend Developer (React)'...
-
-Log: Writing new record to database...
-Result:
-Successfully inserted record. Row ID: 12
-
-
---- Updating Record ---
-Updating headcount record ID 12 status to 'Offer Extended'...
-
-Log: Updating record ID 12 in database...
-Result:
-Successfully updated record with ID: 12. Rows affected: 1
-
-
---- Final Query ---
-Querying 'headcount' category records again to confirm changes...
-
-Log: Executing SQL query for category: headcount
-Result:
-[
-  {
-    "key_name": "Full Stack Software Engineer",
-    "status": "Sourcing",
-    "detail_one": "2 Allocations",
-    "detail_two": "ENG-2026-Q3"
-  },
-  {
-    "key_name": "Frontend Developer",
-    "status": "Interviewing",
-    "detail_one": "1 Allocation",
-    "detail_two": null
-  },
-  {
-    "key_name": "Frontend Developer (React)",
-    "status": "Offer Extended",
-    "detail_one": "1 Allocation",
-    "detail_two": "ENG-2026-Q4"
-  }
-]
-
-
-=========================================
-      Demo Completed Successfully!       
-=========================================
-```
-
----
-
-## Architecture Overview
-
-This server functions as a local coordinator between foundational model sessions and a private SQLite file. Rather than relying on rigid, context-heavy prompt engineering or static file dumps, the server exposes discrete, declarative tools defined using TypeScript and Zod schemas. 
-
-* **Agentic Tool Execution:** Provides the agent with precise, granular capabilities for data retrieval and modification.
-* **Type-Safe Data Contracts:** Zod is used for runtime validation of model-generated arguments before they interact with SQLite. A global interceptor sanitizes Zod error responses, translating raw JSON validation objects into readable strings that help agents self-correct.
-* **Local Data Sovereignty:** Operates locally using `StdioServerTransport` to prevent data leakage and keep operations private.
-
----
-
-## Tool Reference
-
-### 1. `query_data_source`
-Queries database records matching a specific domain category.
-
-#### Zod Schema
-```typescript
-z.object({
-  category: z.string().describe("The data domain to search: internal_metrics, headcount, or engineering_delivery"),
-})
-```
-
-#### Example Call
-```json
-{
-  "name": "query_data_source",
-  "arguments": {
-    "category": "headcount"
-  }
-}
-```
-
-#### Example Response
-```json
-[
-  {
-    "key_name": "Full Stack Software Engineer",
-    "status": "Sourcing",
-    "detail_one": "2 Allocations",
-    "detail_two": "ENG-2026-Q3"
-  }
-]
-```
-
----
-
-### 2. `add_database_record`
-Inserts a new record into the database.
-
-#### Zod Schema
-```typescript
-z.object({
-  category: z.string().describe("The domain category: internal_metrics, headcount, or engineering_delivery"),
-  key_name: z.string().describe("The primary name of the metric, project, or job title"),
-  status: z.string().describe("The current status (e.g. Sourcing, In Progress, Stable)"),
-  detail_one: z.string().optional().describe("Additional descriptive detail"),
-  detail_two: z.string().optional().describe("A second optional detail"),
-})
-```
-
-#### Example Call
-```json
-{
-  "name": "add_database_record",
-  "arguments": {
-    "category": "headcount",
-    "key_name": "Frontend Developer (React)",
-    "status": "Open",
-    "detail_one": "1 Allocation",
-    "detail_two": "ENG-2026-Q4"
-  }
-}
-```
-
-#### Example Response
-```text
-Successfully inserted record. Row ID: 12
-```
-
----
-
-### 3. `update_database_record`
-Mutates an existing record in the database by its ID. Supports partial updates of all table fields.
-
-#### Zod Schema
-```typescript
-z.object({
-  id: z.number().int().describe("The ID of the record to update"),
-  category: z.string().optional().describe("The new domain category (e.g. internal_metrics, headcount, or engineering_delivery)"),
-  key_name: z.string().optional().describe("The new primary name of the metric, project, or job title"),
-  status: z.string().optional().describe("The new status value"),
-  detail_one: z.string().optional().describe("Additional descriptive detail (use null or empty string to clear)"),
-  detail_two: z.string().optional().describe("A second optional detail (use null or empty string to clear)"),
-})
-```
-
-#### Example Call
-```json
-{
-  "name": "update_database_record",
-  "arguments": {
-    "id": 12,
-    "status": "Interviewing"
-  }
-}
-```
-
-#### Example Response
-```text
-Successfully updated record with ID: 12. Rows affected: 1
-```
-
----
-
-## Setup & Claude Desktop Integration
-
-### 1. Configure Environment
-Create a `.env` file based on `.env.example` to point to your SQLite file:
-```bash
-cp .env.example .env
-```
-
-### 2. Configure Claude Desktop
-Add this server configuration to your `claude_desktop_config.json` (typically located at `~/Library/Application Support/Claude/claude_desktop_config.json` on macOS):
+### 4. Integration with Claude Desktop
+Add this server configuration to your `claude_desktop_config.json` (located at `~/Library/Application Support/Claude/claude_desktop_config.json` on macOS):
 
 *(Note: Use absolute paths to `npx` and your project directory).*
 
@@ -228,31 +115,36 @@ Add this server configuration to your `claude_desktop_config.json` (typically lo
       "command": "npx",
       "args": [
         "tsx",
-        "/absolute/path/to/mcp-server/server.ts"
+        "/absolute/path/to/mcp-server/src/server.ts"
       ]
     }
   }
 }
 ```
 
-### 3. Database Initialization
-The SQLite database (`mcp_database.db`) is ignored by version control. When the MCP server starts up for the first time, it automatically verifies folder write accessibility, initializes the database file, and seeds it with default records.
-
----
-
-## Running Tests
-
-Run the full Vitest suite (validating schemas, database queries, record insertions, partial updates, no-ops, and database failures):
-
+### 5. Running Tests
+Run the comprehensive Vitest test suite, validating CRUD operations, Zod formatting, security boundaries, and SQL injection sanitization:
 ```bash
 npm test
 ```
 
 ---
 
-## Known Limitations
+## Extending the Server
 
-This project is built as a lightweight, developer-focused tooling interface. The following boundaries are intentional design choices rather than oversights:
-* **Local Database Only:** The server communicates directly with a single local SQLite file and is not designed for distributed network databases.
-* **No Concurrent Write Locking:** It relies on SQLite's default concurrency behavior (e.g. locks during active write operations) and is optimized for personal, single-client use.
-* **No Authentication Layer:** Security is maintained by keeping execution strictly bound to local stdio transports on the host machine.
+To expose a new table or database action:
+
+1. **Define Types:** Update [src/types/database.ts](file:///Users/aj/mcp-server/src/types/database.ts) to define records and tool configurations.
+2. **Zod Validation:** Add a corresponding schema definition in [src/tools/schemas.ts](file:///Users/aj/mcp-server/src/tools/schemas.ts).
+3. **Database Handler:** Write your database transaction function in [src/tools/handlers.ts](file:///Users/aj/mcp-server/src/tools/handlers.ts) utilizing parameterized queries.
+4. **Register:** Connect the handler to the server in [src/tools/index.ts](file:///Users/aj/mcp-server/src/tools/index.ts).
+
+---
+
+## Roadmap
+
+Future improvements targeting enterprise agent environments:
+* **Multi-database Driver Interface:** Support PostgreSQL and MySQL drivers through a common database abstract factory pattern.
+* **Granular Role-Based Access Control:** Fine-grained API-key permissions or role scopes mapping client sessions to distinct table boundaries.
+* **Transaction Confirmations:** A secure webhook callback system allowing human-in-the-loop validation before committing high-value database modifications.
+* **Observability Interceptors:** OpenTelemetry tracing support to track tool call durations, error rates, and system resource metrics.

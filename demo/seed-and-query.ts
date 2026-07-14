@@ -1,4 +1,4 @@
-import { server } from "../server.js";
+import { server } from "../src/server.js";
 
 // Helper to call a tool and format the console log output
 async function callTool(name: string, args: any) {
