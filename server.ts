@@ -188,6 +188,97 @@ server.tool(
     }
 );
 
+/**
+ * TOOL 3: Update existing records in the database (Update!)
+ * 
+ * Mutates an existing database row by its ID. Supports partial updates of all table fields.
+ */
+server.tool(
+    "update_database_record",
+    {
+        id: z.number().int().describe("The ID of the record to update"),
+        category: z.string().optional().describe("The new domain category (e.g. internal_metrics, headcount, or engineering_delivery)"),
+        key_name: z.string().optional().describe("The new primary name of the metric, project, or job title"),
+        status: z.string().optional().describe("The new status value"),
+        detail_one: z.string().optional().describe("Additional descriptive detail (use null or empty string to clear)"),
+        detail_two: z.string().optional().describe("A second optional detail (use null or empty string to clear)"),
+    },
+    async ({ id, category, key_name, status, detail_one, detail_two }) => {
+        console.error(`Log: Updating record ID ${id} in database...`);
+
+        // Check if zero update fields are provided
+        if (
+            category === undefined &&
+            key_name === undefined &&
+            status === undefined &&
+            detail_one === undefined &&
+            detail_two === undefined
+        ) {
+            return {
+                content: [
+                    {
+                        type: "text",
+                        text: "Error: At least one update field (category, key_name, status, detail_one, or detail_two) must be provided for update.",
+                    },
+                ],
+                isError: true,
+            };
+        }
+
+        const updates: { col: string; val: any }[] = [];
+        if (category !== undefined) updates.push({ col: "category", val: category });
+        if (key_name !== undefined) updates.push({ col: "key_name", val: key_name });
+        if (status !== undefined) updates.push({ col: "status", val: status });
+        if (detail_one !== undefined) updates.push({ col: "detail_one", val: detail_one || null });
+        if (detail_two !== undefined) updates.push({ col: "detail_two", val: detail_two || null });
+
+        const setClause = updates.map((u) => `${u.col} = ?`).join(", ");
+        const params = updates.map((u) => u.val);
+        params.push(id); // push id for WHERE clause
+
+        const sql = `UPDATE metrics_and_data SET ${setClause} WHERE id = ?`;
+
+        return new Promise((resolve) => {
+            db.run(
+                sql,
+                params,
+                function (this: sqlite3.RunResult, err: Error | null) {
+                    if (err) {
+                        return resolve({
+                            content: [
+                                {
+                                    type: "text",
+                                    text: `Database error updating record: ${err.message}`,
+                                },
+                            ],
+                            isError: true,
+                        });
+                    }
+                    if (this.changes === 0) {
+                        return resolve({
+                            content: [
+                                {
+                                    type: "text",
+                                    text: `Error: Record with ID ${id} not found`,
+                                },
+                            ],
+                            isError: true,
+                        });
+                    }
+                    resolve({
+                        content: [
+                            {
+                                type: "text",
+                                text: `Successfully updated record with ID: ${id}. Rows affected: ${this.changes}`,
+                            },
+                        ],
+                    });
+                }
+            );
+        });
+    }
+);
+
 // NOTE: This relies on undocumented SDK internals (_requestHandlers). This may break silently on SDK version upgrades.
 // If tool error formatting stops working after an SDK bump, check here first.
 const serverInstance = server.server as any;
