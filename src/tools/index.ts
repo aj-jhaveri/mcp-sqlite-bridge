@@ -1,5 +1,5 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
-import sqlite3 from "sqlite3";
+import { IMetricsRepository } from "../db/repository.js";
 import { ServerConfig } from "../types/database.js";
 import {
     QueryDataSourceSchema,
@@ -13,11 +13,12 @@ import {
 } from "./handlers.js";
 
 /**
- * Registers MCP tools with the server depending on configuration permissions.
+ * Registers MCP tools with the server using injected Repository instances.
+ * Dynamically registers mutating endpoints based on read-only configurations.
  */
 export function registerTools(
     server: McpServer,
-    db: sqlite3.Database,
+    repo: IMetricsRepository,
     config: ServerConfig
 ): void {
     // 1. Expose the Read (Query) Tool unconditionally
@@ -25,7 +26,7 @@ export function registerTools(
         "query_data_source",
         QueryDataSourceSchema,
         async (args) => {
-            return handleQueryDataSource(db, args);
+            return handleQueryDataSource(repo, args);
         }
     );
 
@@ -35,7 +36,7 @@ export function registerTools(
             "add_database_record",
             AddDatabaseRecordSchema,
             async (args) => {
-                return handleAddDatabaseRecord(db, args);
+                return handleAddDatabaseRecord(repo, args);
             }
         );
 
@@ -43,7 +44,7 @@ export function registerTools(
             "update_database_record",
             UpdateDatabaseRecordSchema,
             async (args) => {
-                return handleUpdateDatabaseRecord(db, args);
+                return handleUpdateDatabaseRecord(repo, args);
             }
         );
     } else {

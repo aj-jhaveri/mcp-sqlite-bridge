@@ -1,19 +1,17 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
-import sqlite3 from "sqlite3";
 import { fileURLToPath } from "url";
 import path from "path";
 import dotenv from "dotenv";
 
 import { ServerConfig } from "./types/database.js";
-import { validateDatabasePath } from "./db/database.js";
-import { CREATE_TABLE_SQL } from "./db/schema.js";
-import { seedDatabase } from "./db/seed.js";
+import { createDatabase } from "./db/database.js";
+import { SqliteMetricsRepository } from "./db/repository.js";
 import { registerTools } from "./tools/index.js";
 import { setupErrorFormatting } from "./middleware/error-handler.js";
 
 // Load configuration
-dotenv.config();
+dotenv.config({ quiet: true });
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -28,24 +26,9 @@ const config: ServerConfig = {
     readOnly: process.env.READ_ONLY === "true",
 };
 
-// Validate SQLite database file path write privileges
-validateDatabasePath(config.dbPath);
-
-// Initialize SQLite database connection
-const db = new sqlite3.Database(config.dbPath);
-
-// Initialize the database schema and seed data asynchronously
-db.serialize(() => {
-    db.run(CREATE_TABLE_SQL, (err) => {
-        if (err) {
-            console.error("Database schema initialization failed:", err.message);
-        } else {
-            seedDatabase(db).catch((seedErr) => {
-                console.error("Database seeding failed:", seedErr.message);
-            });
-        }
-    });
-});
+// Asynchronously initialize database connection, create schema, and seed default data
+const db = await createDatabase(config);
+const repo = new SqliteMetricsRepository(db);
 
 // Initialize MCP Server
 const server = new McpServer({
@@ -53,11 +36,11 @@ const server = new McpServer({
     version: "1.0.0",
 });
 
-// Register tools based on configuration
-registerTools(server, db, config);
-
-// Setup error formatting middleware
+// Setup error formatting middleware BEFORE registering tools to intercept handler calls
 setupErrorFormatting(server);
+
+// Register tools based on configuration, passing the repository abstraction
+registerTools(server, repo, config);
 
 /**
  * Starts the MCP stdio server transport.
@@ -67,6 +50,33 @@ async function runServer() {
     await server.connect(transport);
     console.error("MCP Server running on Stdio with SQLite");
 }
+
+/**
+ * Perform clean teardown on process signals (SIGINT, SIGTERM).
+ */
+const cleanup = async () => {
+    console.error("\nLog: Shutting down MCP server gracefully...");
+    try {
+        await server.close();
+    } catch (err) {
+        console.error("Error closing MCP server:", err instanceof Error ? err.message : String(err));
+    }
+
+    await new Promise<void>((resolve) => {
+        db.close((err) => {
+            if (err) {
+                console.error("Error closing SQLite database:", err.message);
+            } else {
+                console.error("Log: SQLite database connection closed gracefully.");
+            }
+            resolve();
+        });
+    });
+    process.exit(0);
+};
+
+process.on("SIGINT", cleanup);
+process.on("SIGTERM", cleanup);
 
 // Check if run directly
 const isMain = process.argv[1] && (

@@ -1,42 +1,82 @@
 import { describe, it, expect, beforeAll } from "vitest";
+import { Client } from "@modelcontextprotocol/sdk/client/index.js";
+import { Transport } from "@modelcontextprotocol/sdk/shared/transport.js";
+import { JSONRPCMessage } from "@modelcontextprotocol/sdk/types.js";
 
 // Set isolated database path to in-memory BEFORE importing the server
 process.env.DB_PATH = ":memory:";
 
 import { server, db } from "../src/server.js";
 
+/**
+ * A clean, type-safe mock transport that facilitates in-memory process piping
+ * for strict black-box client/server communication testing.
+ */
+class InMemoryMockTransport implements Transport {
+    onclose?: () => void;
+    onerror?: (error: Error) => void;
+    onmessage?: (message: JSONRPCMessage) => void;
+
+    constructor(public other?: InMemoryMockTransport) {}
+
+    async start(): Promise<void> {}
+    async close(): Promise<void> {
+        this.onclose?.();
+    }
+    async send(message: JSONRPCMessage): Promise<void> {
+        setTimeout(() => this.other?.onmessage?.(message), 0);
+    }
+}
+
 describe("MCP SQLite Bridge Server", () => {
-    // Helper to call tools programmatically
+    let client: Client;
+
+    // Helper to call tools programmatically using the Client SDK
     const callTool = async (name: string, args: Record<string, any>) => {
-        const handler = (server.server as any)._requestHandlers.get("tools/call");
-        if (!handler) throw new Error("tools/call handler not found");
-        return await handler({
-            method: "tools/call",
-            params: {
+        try {
+            const res = await client.callTool({
                 name,
                 arguments: args,
-            },
-        }, {
-            signal: new AbortController().signal,
-        });
+            });
+            return {
+                content: res.content,
+                isError: res.isError ? true : undefined,
+            };
+        } catch (err: any) {
+            return {
+                content: [{ type: "text" as const, text: err.message }],
+                isError: true,
+            };
+        }
     };
 
-    beforeAll(() => {
-        // Wait a small moment to ensure DB serialization & seeding finishes
-        return new Promise((resolve) => setTimeout(resolve, 200));
+    beforeAll(async () => {
+        const serverTransport = new InMemoryMockTransport();
+        const clientTransport = new InMemoryMockTransport();
+        serverTransport.other = clientTransport;
+        clientTransport.other = serverTransport;
+
+        await server.connect(serverTransport);
+
+        client = new Client(
+            { name: "test-client", version: "1.0.0" },
+            { capabilities: {} }
+        );
+        await client.connect(clientTransport);
     });
 
     describe("Input Validation (Zod)", () => {
         it("should reject malformed input for add_database_record", async () => {
             const result = await callTool("add_database_record", {
-                category: 123, // should be string
+                category: 123, // should be string/enum
                 key_name: "Test Job",
                 // status is missing (Required)
             });
 
             expect(result.isError).toBe(true);
             expect(result.content[0].text).toContain("Input validation error");
-            expect(result.content[0].text).toContain("Field 'category': expected string, received number");
+            expect(result.content[0].text).toContain("Field 'category':");
+            expect(result.content[0].text).toContain("expected one of");
             expect(result.content[0].text).toContain("Field 'status': expected string, received undefined");
         });
 
@@ -62,8 +102,6 @@ describe("MCP SQLite Bridge Server", () => {
         });
 
         it("should verify the Zod error formatter regex matches the SDK's actual error string structure", async () => {
-            // NOTE: This test guards the regex used in the global error handler. If the SDK updates its error prefix
-            // format, this test will fail, alerting maintainers to update the regex in server.ts.
             const result = await callTool("add_database_record", {
                 category: 123, // wrong type to trigger validation error
             });

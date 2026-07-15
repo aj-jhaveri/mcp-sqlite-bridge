@@ -1,112 +1,90 @@
-import sqlite3 from "sqlite3";
-import { McpToolResponse, MetricRecord } from "../types/database.js";
+import { IMetricsRepository } from "../db/repository.js";
+import { McpToolResponse, NewMetricRecord, UpdateMetricRecord } from "../types/database.js";
 
 /**
  * Handles query_data_source tool execution.
- * Fetches rows matching a given category/domain.
+ * Invokes the repository layer to fetch records and formats the response.
  */
 export async function handleQueryDataSource(
-    db: sqlite3.Database,
+    repo: IMetricsRepository,
     args: { category: string }
 ): Promise<McpToolResponse> {
     const { category } = args;
-    console.error(`Log: Executing SQL query for category: ${category}`);
+    console.error(`Log: Executing repository query for category: ${category}`);
 
-    return new Promise((resolve) => {
-        db.all(
-            "SELECT key_name, status, detail_one, detail_two FROM metrics_and_data WHERE category = ?",
-            [category],
-            (err: Error | null, rows: MetricRecord[]) => {
-                if (err) {
-                    return resolve({
-                        content: [
-                            {
-                                type: "text",
-                                text: `Database error querying data source: ${err.message}`,
-                            },
-                        ],
-                        isError: true,
-                    });
-                }
-                resolve({
-                    content: [
-                        {
-                            type: "text",
-                            text: JSON.stringify(rows, null, 2),
-                        },
-                    ],
-                });
-            }
-        );
-    });
+    try {
+        const rows = await repo.queryByCategory(category);
+        return {
+            content: [
+                {
+                    type: "text",
+                    text: JSON.stringify(rows, null, 2),
+                },
+            ],
+        };
+    } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        console.error("Database query operation failed:", msg);
+        return {
+            content: [
+                {
+                    type: "text",
+                    text: `Database error querying data source: ${msg}`,
+                },
+            ],
+            isError: true,
+        };
+    }
 }
 
 /**
  * Handles add_database_record tool execution.
- * Inserts a new row into the database with category, key_name, status, and optional details.
+ * Decoupled from SQLite details; writes records through the IMetricsRepository contract.
  */
 export async function handleAddDatabaseRecord(
-    db: sqlite3.Database,
-    args: {
-        category: string;
-        key_name: string;
-        status: string;
-        detail_one?: string;
-        detail_two?: string;
-    }
+    repo: IMetricsRepository,
+    args: NewMetricRecord
 ): Promise<McpToolResponse> {
-    const { category, key_name, status, detail_one, detail_two } = args;
-    console.error(`Log: Writing new record to database...`);
+    console.error(`Log: Executing repository write...`);
 
-    return new Promise((resolve) => {
-        db.run(
-            `INSERT INTO metrics_and_data (category, key_name, status, detail_one, detail_two) 
-             VALUES (?, ?, ?, ?, ?)`,
-            [category, key_name, status, detail_one || null, detail_two || null],
-            function (this: sqlite3.RunResult, err: Error | null) {
-                if (err) {
-                    return resolve({
-                        content: [
-                            {
-                                type: "text",
-                                text: `Database error adding record: ${err.message}`,
-                            },
-                        ],
-                        isError: true,
-                    });
-                }
-                resolve({
-                    content: [
-                        {
-                            type: "text",
-                            text: `Successfully inserted record. Row ID: ${this.lastID}`,
-                        },
-                    ],
-                });
-            }
-        );
-    });
+    try {
+        const lastID = await repo.addRecord(args);
+        return {
+            content: [
+                {
+                    type: "text",
+                    text: `Successfully inserted record. Row ID: ${lastID}`,
+                },
+            ],
+        };
+    } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        console.error("Database write operation failed:", msg);
+        return {
+            content: [
+                {
+                    type: "text",
+                    text: `Database error adding record: ${msg}`,
+                },
+            ],
+            isError: true,
+        };
+    }
 }
 
 /**
  * Handles update_database_record tool execution.
- * Mutates an existing database row by its ID. Supports partial updates of all table fields.
+ * Performs logical validation of partial update arguments, then executes the update via IMetricsRepository.
  */
 export async function handleUpdateDatabaseRecord(
-    db: sqlite3.Database,
-    args: {
-        id: number;
-        category?: string;
-        key_name?: string;
-        status?: string;
-        detail_one?: string;
-        detail_two?: string;
-    }
+    repo: IMetricsRepository,
+    args: UpdateMetricRecord
 ): Promise<McpToolResponse> {
-    const { id, category, key_name, status, detail_one, detail_two } = args;
-    console.error(`Log: Updating record ID ${id} in database...`);
+    const { id } = args;
+    console.error(`Log: Executing repository update for ID ${id}...`);
 
-    // Check if zero update fields are provided
+    // Verify if we have any fields to update (other than the ID parameter)
+    const { category, key_name, status, detail_one, detail_two } = args;
     if (
         category === undefined &&
         key_name === undefined &&
@@ -125,55 +103,38 @@ export async function handleUpdateDatabaseRecord(
         };
     }
 
-    const updates: { col: string; val: string | number | null }[] = [];
-    if (category !== undefined) updates.push({ col: "category", val: category });
-    if (key_name !== undefined) updates.push({ col: "key_name", val: key_name });
-    if (status !== undefined) updates.push({ col: "status", val: status });
-    if (detail_one !== undefined) updates.push({ col: "detail_one", val: detail_one || null });
-    if (detail_two !== undefined) updates.push({ col: "detail_two", val: detail_two || null });
-
-    const setClause = updates.map((u) => `${u.col} = ?`).join(", ");
-    const params: (string | number | null)[] = updates.map((u) => u.val);
-    params.push(id); // push id for WHERE clause
-
-    const sql = `UPDATE metrics_and_data SET ${setClause} WHERE id = ?`;
-
-    return new Promise((resolve) => {
-        db.run(
-            sql,
-            params,
-            function (this: sqlite3.RunResult, err: Error | null) {
-                if (err) {
-                    return resolve({
-                        content: [
-                            {
-                                type: "text",
-                                text: `Database error updating record: ${err.message}`,
-                            },
-                        ],
-                        isError: true,
-                    });
-                }
-                if (this.changes === 0) {
-                    return resolve({
-                        content: [
-                            {
-                                type: "text",
-                                text: `Error: Record with ID ${id} not found`,
-                            },
-                        ],
-                        isError: true,
-                    });
-                }
-                resolve({
-                    content: [
-                        {
-                            type: "text",
-                            text: `Successfully updated record with ID: ${id}. Rows affected: ${this.changes}`,
-                        },
-                    ],
-                });
-            }
-        );
-    });
+    try {
+        const changes = await repo.updateRecord(args);
+        if (changes === 0) {
+            return {
+                content: [
+                    {
+                        type: "text",
+                        text: `Error: Record with ID ${id} not found`,
+                    },
+                ],
+                isError: true,
+            };
+        }
+        return {
+            content: [
+                {
+                    type: "text",
+                    text: `Successfully updated record with ID: ${id}. Rows affected: ${changes}`,
+                },
+            ],
+        };
+    } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        console.error("Database update operation failed:", msg);
+        return {
+            content: [
+                {
+                    type: "text",
+                    text: `Database error updating record: ${msg}`,
+                },
+            ],
+            isError: true,
+        };
+    }
 }

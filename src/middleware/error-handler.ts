@@ -1,4 +1,5 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import { CallToolRequestSchema } from "@modelcontextprotocol/sdk/types.js";
 import { McpToolResponse } from "../types/database.js";
 
 interface ZodIssue {
@@ -9,81 +10,64 @@ interface ZodIssue {
     message: string;
 }
 
-// SDK request handlers are async functions that take a request payload and context
-type SdkRequestHandler = (request: any, extra: any) => Promise<McpToolResponse>;
-
 /**
- * Intercepts the MCP SDK's internal tools/call handler to sanitize and reformat Zod validation errors.
- * Instead of exposing a raw Zod JSON issue list, it translates validation errors into actionable,
- * developer/agent-readable strings like: "Input validation error: Field 'status' is required".
- * 
- * NOTE: This relies on undocumented SDK internals (serverInstance._requestHandlers). If the MCP SDK is 
- * upgraded, this interceptor may fail silently or logs a warning if the internal map layout changes.
+ * Decorates the MCP SDK's public setRequestHandler method to intercept the
+ * 'tools/call' handler registration. This catches and reformats Zod schema validation
+ * errors into clean, agent-friendly feedback strings without exposing private SDK internals.
  */
 export function setupErrorFormatting(server: McpServer): void {
-    // Access the low-level server instance inside the McpServer wrapper
-    const serverInstance = server.server as unknown as {
-        _requestHandlers?: Map<string, SdkRequestHandler>;
-    };
+    const originalSetRequestHandler = server.server.setRequestHandler.bind(server.server);
 
-    if (!serverInstance || !serverInstance._requestHandlers) {
-        console.error(
-            "Warning: error-formatting wrapper could not attach because server._requestHandlers was not found. Raw Zod errors will be returned."
-        );
-        return;
-    }
+    // Override the public setRequestHandler method on the internal Server instance
+    server.server.setRequestHandler = (schema: any, handler: any) => {
+        if (schema === CallToolRequestSchema) {
+            // Wrap the tools/call handler to post-process validation errors
+            const wrappedHandler = async (request: any, extra: any) => {
+                const result = (await handler(request, extra)) as McpToolResponse;
 
-    const originalCallToolHandler = serverInstance._requestHandlers.get("tools/call");
+                if (
+                    result &&
+                    result.isError &&
+                    result.content &&
+                    result.content[0] &&
+                    result.content[0].text
+                ) {
+                    const text = result.content[0].text;
 
-    if (originalCallToolHandler) {
-        serverInstance._requestHandlers.set("tools/call", async (request, extra) => {
-            const result = await originalCallToolHandler(request, extra);
+                    // Match Zod schema output within the SDK's generated error string
+                    const match = text.match(
+                        /^(?:MCP error [-\d]+: )?(Input validation error: Invalid arguments for tool [^:]+: )([\s\S]+)$/
+                    );
 
-            // If the execution returned a validation/parsing error, format it
-            if (
-                result &&
-                result.isError &&
-                result.content &&
-                result.content[0] &&
-                result.content[0].text
-            ) {
-                const text = result.content[0].text;
+                    if (match) {
+                        const rawJson = match[2];
+                        try {
+                            const issues = JSON.parse(rawJson) as ZodIssue[];
+                            if (Array.isArray(issues)) {
+                                const formatted = issues
+                                    .map((issue) => {
+                                        const pathStr = issue.path.join(".");
+                                        const cleanMsg = issue.message.replace(/^Invalid input:\s*/i, "");
+                                        if (cleanMsg.toLowerCase() === "required") {
+                                            return `Field '${pathStr}' is required`;
+                                        }
+                                        return `Field '${pathStr}': ${cleanMsg}`;
+                                    })
+                                    .join("; ");
 
-                // Match both:
-                // - SDK format: "Input validation error: Invalid arguments for tool <name>: <JSON_STRING>"
-                // - Raw Zod error containing json string
-                const match = text.match(
-                    /^(?:MCP error [-\d]+: )?(Input validation error: Invalid arguments for tool [^:]+: )([\s\S]+)$/
-                );
-
-                if (match) {
-                    const rawJson = match[2];
-                    try {
-                        const issues = JSON.parse(rawJson) as ZodIssue[];
-                        if (Array.isArray(issues)) {
-                            const formatted = issues
-                                .map((issue) => {
-                                    const pathStr = issue.path.join(".");
-                                    const cleanMsg = issue.message.replace(/^Invalid input:\s*/i, "");
-                                    if (cleanMsg.toLowerCase() === "required") {
-                                        return `Field '${pathStr}' is required`;
-                                    }
-                                    return `Field '${pathStr}': ${cleanMsg}`;
-                                })
-                                .join("; ");
-
-                            result.content[0].text = `Input validation error: ${formatted}`;
+                                result.content[0].text = `Input validation error: ${formatted}`;
+                            }
+                        } catch (e) {
+                            // Fallback gracefully to original SDK error if JSON parsing fails
                         }
-                    } catch (e) {
-                        // If json parsing fails, fallback gracefully to the original SDK error message
                     }
                 }
-            }
-            return result;
-        });
-    } else {
-        console.error(
-            "Warning: error-formatting wrapper could not attach because 'tools/call' request handler was not registered. Raw Zod errors will be returned."
-        );
-    }
+                return result;
+            };
+
+            return originalSetRequestHandler(schema, wrappedHandler);
+        }
+
+        return originalSetRequestHandler(schema, handler);
+    };
 }

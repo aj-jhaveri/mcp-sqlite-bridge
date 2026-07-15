@@ -20,7 +20,7 @@ Rather than engineering monolithic API integrations for every custom application
 
 ## Architecture
 
-This project implements a modular, layered architecture to decouple transport protocols, parameter validations, and SQL transaction executions.
+This project implements a modular, layered architecture to decouple transport protocols, parameter validations, repository query layers, and database drivers.
 
 ```mermaid
 graph TD
@@ -29,7 +29,8 @@ graph TD
     Server <-->|Error Formatter Middleware| Middleware[Error Handler]
     Server <-->|Zod Schema Validation| Schemas[Validation Layer]
     Schemas <-->|Resolved Parameters| Handlers[Tool Handlers]
-    Handlers <-->|Parameterized Query| Database[(SQLite: mcp_database.db)]
+    Handlers <-->|Repository Operations| Repository[Repository Layer]
+    Repository <-->|Parameterized Query| Database[(SQLite: mcp_database.db)]
 ```
 
 ### Request Flow
@@ -37,8 +38,9 @@ graph TD
 2. **MCP Protocol Layer:** Decodes the JSON-RPC payload and routes the parameters to the registered tool schema.
 3. **Validation Layer:** Evaluates the parameters against strict Zod definitions. 
 4. **Error Interceptor:** If validation fails, custom middleware interceptor cleans and compiles Zod issues into flat, readable error strings.
-5. **Tool Handlers:** Receives validated TypeScript objects, executes parameterized queries against SQLite, and packages data into the standard MCP payload format.
-6. **SQLite Driver:** Fetches records or commits updates to the database safely, keeping operations isolated.
+5. **Tool Handlers:** Receives validated TypeScript objects and delegates operation calls to the Repository Layer.
+6. **Repository Layer:** Abstracted query boundary executing parameterized operations directly against the database driver.
+7. **SQLite Driver:** Writes changes or fetches records safely, keeping data operations isolated.
 
 ---
 
@@ -107,16 +109,15 @@ npm run demo
 ### 4. Integration with Claude Desktop
 Add this server configuration to your `claude_desktop_config.json` (located at `~/Library/Application Support/Claude/claude_desktop_config.json` on macOS):
 
-*(Note: Use absolute paths to `npx` and your project directory).*
+*(Note: Running the compiled code with standard `node` is recommended in production to prevent transpiler tool status outputs from polluting the `stdout` stream).*
 
 ```json
 {
   "mcpServers": {
     "slake-data-tools": {
-      "command": "npx",
+      "command": "node",
       "args": [
-        "tsx",
-        "/absolute/path/to/mcp-server/src/server.ts"
+        "/absolute/path/to/mcp-server/dist/server.js"
       ]
     }
   }
@@ -135,10 +136,10 @@ npm test
 
 To expose a new table or database action:
 
-1. **Define Types:** Update [src/types/database.ts](file:///Users/aj/mcp-server/src/types/database.ts) to define records and tool configurations.
-2. **Zod Validation:** Add a corresponding schema definition in [src/tools/schemas.ts](file:///Users/aj/mcp-server/src/tools/schemas.ts).
-3. **Database Handler:** Write your database transaction function in [src/tools/handlers.ts](file:///Users/aj/mcp-server/src/tools/handlers.ts) utilizing parameterized queries.
-4. **Register:** Connect the handler to the server in [src/tools/index.ts](file:///Users/aj/mcp-server/src/tools/index.ts).
+1. **Zod Validation & Types:** Add a corresponding schema definition in [src/tools/schemas.ts](file:///Users/aj/mcp-server/src/tools/schemas.ts). TypeScript types in [src/types/database.ts](file:///Users/aj/mcp-server/src/types/database.ts) will automatically be inferred.
+2. **Repository Layer:** Update the `IMetricsRepository` interface and implementation in [src/db/repository.ts](file:///Users/aj/mcp-server/src/db/repository.ts) with the new database query logic.
+3. **Database Handler:** Write your high-level transaction wrapper in [src/tools/handlers.ts](file:///Users/aj/mcp-server/src/tools/handlers.ts) calling the repository.
+4. **Register:** Connect the handler and inject the repository in [src/tools/index.ts](file:///Users/aj/mcp-server/src/tools/index.ts).
 
 ---
 

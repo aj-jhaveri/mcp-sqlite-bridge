@@ -1,11 +1,38 @@
 import { describe, it, expect } from "vitest";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import { Client } from "@modelcontextprotocol/sdk/client/index.js";
+import { Transport } from "@modelcontextprotocol/sdk/shared/transport.js";
+import { JSONRPCMessage } from "@modelcontextprotocol/sdk/types.js";
+
 import { createDatabase } from "../src/db/database.js";
+import { SqliteMetricsRepository } from "../src/db/repository.js";
 import { registerTools } from "../src/tools/index.js";
 import { setupErrorFormatting } from "../src/middleware/error-handler.js";
 
 /**
+ * A clean, type-safe mock transport that facilitates in-memory process piping
+ * for strict black-box client/server communication testing.
+ */
+class InMemoryMockTransport implements Transport {
+    onclose?: () => void;
+    onerror?: (error: Error) => void;
+    onmessage?: (message: JSONRPCMessage) => void;
+
+    constructor(public other?: InMemoryMockTransport) {}
+
+    async start(): Promise<void> {}
+    async close(): Promise<void> {
+        this.onclose?.();
+    }
+    async send(message: JSONRPCMessage): Promise<void> {
+        // Asynchronously deliver the message to simulate boundary crossings
+        setTimeout(() => this.other?.onmessage?.(message), 0);
+    }
+}
+
+/**
  * Test setup helper using dependency injection to boot isolated server & DB instances.
+ * Establishes a true client connection over mock transport to test public API contracts.
  */
 async function setupTestEnvironment(readOnly: boolean) {
     const server = new McpServer({
@@ -17,43 +44,51 @@ async function setupTestEnvironment(readOnly: boolean) {
         dbPath: ":memory:",
         readOnly,
     });
-
+    const repo = new SqliteMetricsRepository(db);
     const config = { dbPath: ":memory:", readOnly };
 
-    registerTools(server, db, config);
+    // Setup error interceptor BEFORE tool registration
     setupErrorFormatting(server);
+    registerTools(server, repo, config);
+
+    const serverTransport = new InMemoryMockTransport();
+    const clientTransport = new InMemoryMockTransport();
+    serverTransport.other = clientTransport;
+    clientTransport.other = serverTransport;
+
+    await server.connect(serverTransport);
+
+    const client = new Client(
+        { name: "test-client", version: "1.0.0" },
+        { capabilities: {} }
+    );
+    await client.connect(clientTransport);
 
     const callTool = async (name: string, args: Record<string, any>) => {
-        const handler = (server.server as any)._requestHandlers.get("tools/call");
-        if (!handler) throw new Error("tools/call handler not found");
-        return await handler(
-            {
-                method: "tools/call",
-                params: {
-                    name,
-                    arguments: args,
-                },
-            },
-            {
-                signal: new AbortController().signal,
-            }
-        );
+        try {
+            const res = await client.callTool({
+                name,
+                arguments: args,
+            });
+            // Normalize return to match expected test payload formats
+            return {
+                content: res.content,
+                isError: res.isError ? true : undefined,
+            };
+        } catch (err: any) {
+            // Return raw error structures for unregistered tools or protocol violations
+            return {
+                content: [{ type: "text" as const, text: err.message }],
+                isError: true,
+            };
+        }
     };
 
     const listTools = async () => {
-        const handler = (server.server as any)._requestHandlers.get("tools/list");
-        if (!handler) throw new Error("tools/list handler not found");
-        return await handler(
-            {
-                method: "tools/list",
-            },
-            {
-                signal: new AbortController().signal,
-            }
-        );
+        return await client.listTools();
     };
 
-    return { db, callTool, listTools };
+    return { db, callTool, listTools, client, server };
 }
 
 describe("MCP SQLite Bridge Security & Isolation Suite", () => {
@@ -62,33 +97,28 @@ describe("MCP SQLite Bridge Security & Isolation Suite", () => {
             const { listTools, callTool } = await setupTestEnvironment(true);
 
             const toolList = await listTools();
-            const names = toolList.tools.map((t: any) => t.name);
+            const names = toolList.tools.map((t) => t.name);
 
             expect(names).toContain("query_data_source");
             expect(names).not.toContain("add_database_record");
             expect(names).not.toContain("update_database_record");
 
-            // Attempting to call mutating tools directly should fail (since they are not registered)
+            // Attempting to call mutating tools directly should fail
             const addResult = await callTool("add_database_record", {
                 category: "engineering_delivery",
                 key_name: "Forbidden record",
                 status: "Open",
-            }).catch((err) => err);
+            });
 
-            // The SDK's underlying RPC router returns undefined or throws error for unregistered tools
-            expect(addResult).toBeDefined();
-            // Since original handler won't match, SDK throws an MCP error
-            if (addResult && !addResult.isError) {
-                // If it resolves, it should be an error status
-                expect(addResult.isError).toBe(true);
-            }
+            expect(addResult.isError).toBe(true);
+            expect(addResult.content[0].text).toContain("not found");
         });
 
         it("should expose full CRUD tools when READ_ONLY is disabled", async () => {
             const { listTools } = await setupTestEnvironment(false);
 
             const toolList = await listTools();
-            const names = toolList.tools.map((t: any) => t.name);
+            const names = toolList.tools.map((t) => t.name);
 
             expect(names).toContain("query_data_source");
             expect(names).toContain("add_database_record");
@@ -96,40 +126,32 @@ describe("MCP SQLite Bridge Security & Isolation Suite", () => {
         });
     });
 
-    describe("SQL Injection Mitigations", () => {
-        it("should handle malicious category parameters safely in read queries", async () => {
-            const { callTool, db } = await setupTestEnvironment(false);
+    describe("SQL Injection & Parameter boundaries", () => {
+        it("should reject malicious category parameters at the schema validation boundary", async () => {
+            const { callTool } = await setupTestEnvironment(false);
 
             // Attempt SQL Injection payload in query_data_source category parameter
             const result = await callTool("query_data_source", {
                 category: "headcount' OR '1'='1",
             });
 
-            expect(result.isError).toBeUndefined();
-            const rows = JSON.parse(result.content[0].text);
-            // Parameterization means searching for category literally matching the payload, returning empty array
-            expect(rows).toEqual([]);
+            // Strict Zod enums reject it at the boundary, returning a validation error
+            expect(result.isError).toBe(true);
+            expect(result.content[0].text).toContain("Input validation error:");
+            expect(result.content[0].text).toContain("expected one of");
 
             // Drop table payload attempt
             const dropResult = await callTool("query_data_source", {
                 category: "engineering_delivery'; DROP TABLE metrics_and_data;--",
             });
 
-            expect(dropResult.isError).toBeUndefined();
-
-            // Verify table still exists and can query valid records successfully
-            const verification = await callTool("query_data_source", {
-                category: "headcount",
-            });
-            expect(verification.isError).toBeUndefined();
-            const validRows = JSON.parse(verification.content[0].text);
-            expect(validRows.length).toBeGreaterThan(0);
+            expect(dropResult.isError).toBe(true);
         });
 
-        it("should handle SQL injection payloads safely in insert and update statements", async () => {
+        it("should handle SQL injection payloads safely in generic string insert and update statements", async () => {
             const { callTool } = await setupTestEnvironment(false);
 
-            // Attempt injection during add
+            // Attempt injection during add on the generic string field key_name
             const addResult = await callTool("add_database_record", {
                 category: "engineering_delivery",
                 key_name: "Malicious Job'); DROP TABLE metrics_and_data;--",
@@ -142,6 +164,8 @@ describe("MCP SQLite Bridge Security & Isolation Suite", () => {
             const queryResult = await callTool("query_data_source", {
                 category: "engineering_delivery",
             });
+            expect(queryResult.isError).toBeUndefined();
+
             const rows = JSON.parse(queryResult.content[0].text);
             const inserted = rows.find((r: any) => r.key_name.includes("DROP TABLE"));
             expect(inserted).toBeDefined();
@@ -153,14 +177,15 @@ describe("MCP SQLite Bridge Security & Isolation Suite", () => {
             const { callTool } = await setupTestEnvironment(false);
 
             const result = await callTool("add_database_record", {
-                category: 12345, // invalid type
-                // status missing
+                category: 12345, // invalid type (number instead of enum/string)
+                // status missing (required field)
             });
 
             expect(result.isError).toBe(true);
             const errorMsg = result.content[0].text;
             expect(errorMsg).toContain("Input validation error:");
-            expect(errorMsg).toContain("Field 'category': expected string, received number");
+            expect(errorMsg).toContain("Field 'category':");
+            expect(errorMsg).toContain("expected one of");
             expect(errorMsg).toContain("Field 'status': expected string, received undefined");
         });
     });

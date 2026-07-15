@@ -7,7 +7,8 @@
     "build": "tsc",
     "start": "tsx src/server.ts",
     "test": "vitest run",
-    "demo": "tsx demo/seed-and-query.ts"
+    "demo": "tsx demo/seed-and-query.ts",
+    "db:clean": "rm -f mcp_database.db"
   },
   "keywords": [],
   "author": "Anish Jhaveri",
