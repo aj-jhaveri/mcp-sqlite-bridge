@@ -3,6 +3,9 @@
   "version": "1.0.0",
   "description": "A Model Context Protocol server giving LLM agents type-safe read/write access to a local SQLite database",
   "main": "dist/server.js",
+  "engines": {
+    "node": "22.12.0"
+  },
   "scripts": {
     "build": "tsc",
     "start": "node dist/server.js",
