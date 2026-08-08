@@ -6,7 +6,9 @@
 [![CI](https://github.com/aj-jhaveri/mcp-sqlite-bridge/actions/workflows/ci.yml/badge.svg)](https://github.com/aj-jhaveri/mcp-sqlite-bridge/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
-A clean, modular Model Context Protocol (MCP) server that enables AI agents to securely interact with local SQLite databases through type-safe, validated tools. Built with TypeScript, Zod, and Vitest, this server demonstrates modern AI engineering patterns, including agent-friendly error feedback loops and runtime safety controls.
+A clean, modular Model Context Protocol (MCP) server that enables AI agents to securely interact with local or remote SQLite databases through type-safe, validated tools over both **Stdio** and **HTTP / SSE JSON-RPC 2.0** transports.
+
+**Live Web Demo:** [slakedesign.com/demo/mcp](https://slakedesign.com/demo/mcp)
 
 ---
 
@@ -14,33 +16,32 @@ A clean, modular Model Context Protocol (MCP) server that enables AI agents to s
 
 Large Language Models (LLMs) are powerful reasoners but lack access to dynamic, real-time private data. The **Model Context Protocol (MCP)**, open-sourced by Anthropic, establishes a standardized bilateral protocol enabling AI agents to interact with data sources, local filesystems, and developer environments. 
 
-Rather than engineering monolithic API integrations for every custom application, developers expose resources and tools via MCP. Standardized clients (such as Claude Desktop) instantly discover these tools, enabling agents to retrieve context, call functions, and inspect system environments dynamically, safely, and locally.
+Rather than engineering monolithic API integrations for every custom application, developers expose resources and tools via MCP. Standardized clients (such as Claude Desktop or remote web applications) instantly discover these tools, enabling agents to retrieve context, call functions, and inspect system environments dynamically, safely, and predictably.
 
 ---
 
 ## Architecture
 
-This project implements a modular, layered architecture to decouple transport protocols, parameter validations, repository query layers, and database drivers.
+This project implements a modular, layered architecture supporting dual transport layers (`Stdio` for local desktop clients and `HTTP JSON-RPC 2.0` for web applications and cloud deployments):
 
 ```mermaid
 graph TD
-    Client[AI Client e.g., Claude Desktop] <-->|JSON-RPC 2.0 over Stdio| Transport[Stdio Transport]
-    Transport <-->|MCP Protocol SDK| Server[MCP Server Router]
-    Server <-->|Error Formatter Middleware| Middleware[Error Handler]
+    Client1[Claude Desktop] <-->|JSON-RPC 2.0 over Stdio| StdioTransport[Stdio Transport]
+    Client2[Web App / Remote Agent] <-->|HTTP POST /api/mcp| HttpTransport[HTTP JSON-RPC 2.0 Express Transport]
+    
+    StdioTransport <-->|MCP Protocol SDK| Server[MCP Server Router]
+    HttpTransport <-->|MCP Protocol SDK| Server
+    
+    Server <-->|Error Formatter Middleware| Middleware[Error Handler Interceptor]
     Server <-->|Zod Schema Validation| Schemas[Validation Layer]
     Schemas <-->|Resolved Parameters| Handlers[Tool Handlers]
     Handlers <-->|Repository Operations| Repository[Repository Layer]
     Repository <-->|Parameterized Query| Database[(SQLite: mcp_database.db)]
 ```
 
-### Request Flow
-1. **AI Client:** Issues a `tools/call` RPC command over standard input (`stdin`).
-2. **MCP Protocol Layer:** Decodes the JSON-RPC payload and routes the parameters to the registered tool schema.
-3. **Validation Layer:** Evaluates the parameters against strict Zod definitions. 
-4. **Error Interceptor:** If validation fails, custom middleware interceptor cleans and compiles Zod issues into flat, readable error strings.
-5. **Tool Handlers:** Receives validated TypeScript objects and delegates operation calls to the Repository Layer.
-6. **Repository Layer:** Abstracted query boundary executing parameterized operations directly against the database driver.
-7. **SQLite Driver:** Writes changes or fetches records safely, keeping data operations isolated.
+### Dual Transport Support
+- **Stdio Transport**: Used by local desktop apps (Claude Desktop, Cursor) operating over `stdin`/`stdout`.
+- **HTTP / SSE Transport**: Express server exposing `POST /api/mcp` and `GET /health` with full CORS support for browser clients and cloud deployments.
 
 ---
 
@@ -50,9 +51,9 @@ The server exposes the following tools depending on the current permission scope
 
 | Tool Name | Operation | Parameters | Description |
 | :--- | :--- | :--- | :--- |
-| `query_data_source` | **Read** | `category: string` | Retrieves records matching the requested category/domain (e.g. `headcount`, `internal_metrics`). |
-| `add_database_record` | **Create** | `category`, `key_name`, `status`, `detail_one?`, `detail_two?` | Inserts a new record into the database table. *(Disabled in read-only mode)* |
-| `update_database_record` | **Update** | `id`, `category?`, `key_name?`, `status?`, `detail_one?`, `detail_two?` | Modifies an existing database row by its unique ID. *(Disabled in read-only mode)* |
+| `query_data_source` | **Read** | `category: string` | Retrieves records matching the requested category/domain (e.g. `headcount`, `internal_metrics`, `engineering_delivery`). |
+| `add_database_record` | **Create** | `category`, `key_name`, `status`, `detail_one?`, `detail_two?` | Inserts a new record into the database table. *(Disabled in `READ_ONLY` mode)* |
+| `update_database_record` | **Update** | `id`, `category?`, `key_name?`, `status?`, `detail_one?`, `detail_two?` | Modifies an existing database row by its unique ID. *(Disabled in `READ_ONLY` mode)* |
 
 ---
 
@@ -75,41 +76,50 @@ When the LLM client receives this feedback, it identifies exactly which fields w
 Security is paramount when exposing data stores to autonomous agent operations:
 
 1. **SQL Injection Prevention:** Every query in the handlers is fully parameterized. Handlers bind raw client values strictly using SQLite parameter bindings (`?`), preventing malicious payloads from altering the SQL statement structure.
-2. **Access Control (READ_ONLY Mode):** The server supports a configurable read-only safety boundary. When enabled, mutation tools (`add_database_record`, `update_database_record`) are not registered or exposed.
-3. **Local Sovereignty:** By operating entirely over `StdioServerTransport` on the local loop, the server prevents remote data leaks and respects host permission boundaries.
+2. **Access Control (`READ_ONLY` Mode):** The server supports a configurable read-only safety boundary. When enabled, mutation tools (`add_database_record`, `update_database_record`) are not registered or exposed, returning an explicit security payload (`MCP_SECURITY_VIOLATION`).
+3. **Local Sovereignty & Transport Flexibility:** Operates securely over local `Stdio` or isolated HTTP endpoints with CORS controls.
 
 ---
 
-## Development
+## REST & HTTP API Usage (JSON-RPC 2.0)
 
-### 1. Installation
-Install dependencies:
+### 1. Health Check
 ```bash
-npm install
+curl http://localhost:3000/health
+# → {"status":"HEALTHY","timestamp":"...","service":"mcp-sqlite-bridge","readOnly":false}
 ```
 
-### 2. Configuration
-Configure your database path and permissions in a local `.env` file:
-```env
-DB_PATH=mcp_database.db
-READ_ONLY=false
-```
-
-### 3. Build & Run
-Compile TypeScript sources to JavaScript:
+### 2. List MCP Tools (`tools/list`)
 ```bash
-npm run build
+curl -X POST http://localhost:3000/api/mcp \
+  -H "Content-Type: application/json" \
+  -d '{
+    "jsonrpc": "2.0",
+    "method": "tools/list",
+    "id": 1
+  }'
 ```
 
-Run a standalone demo demonstrating tool querying, adding, and updating programmatically:
+### 3. Call MCP Read Tool (`tools/call`)
 ```bash
-npm run demo
+curl -X POST http://localhost:3000/api/mcp \
+  -H "Content-Type: application/json" \
+  -d '{
+    "jsonrpc": "2.0",
+    "method": "tools/call",
+    "params": {
+      "name": "query_data_source",
+      "arguments": { "category": "engineering_delivery" }
+    },
+    "id": 2
+  }'
 ```
 
-### 4. Integration with Claude Desktop
-Add this server configuration to your `claude_desktop_config.json` (located at `~/Library/Application Support/Claude/claude_desktop_config.json` on macOS):
+---
 
-*(Note: Running the compiled code with standard `node` is recommended in production to prevent transpiler tool status outputs from polluting the `stdout` stream).*
+## Integration with Claude Desktop (Stdio)
+
+To connect this MCP server to **Claude Desktop**, edit `claude_desktop_config.json` (located at `~/Library/Application Support/Claude/claude_desktop_config.json` on macOS):
 
 ```json
 {
@@ -118,35 +128,44 @@ Add this server configuration to your `claude_desktop_config.json` (located at `
       "command": "node",
       "args": [
         "/absolute/path/to/mcp-server/dist/server.js"
-      ]
+      ],
+      "env": {
+        "STDIO": "true",
+        "READ_ONLY": "false"
+      }
     }
   }
 }
 ```
 
-### 5. Running Tests
-Run the comprehensive Vitest test suite, validating CRUD operations, Zod formatting, security boundaries, and SQL injection sanitization:
+---
+
+## Development
+
+### 1. Installation
+```bash
+npm install
+```
+
+### 2. Build & Typecheck
+```bash
+npm run build
+```
+
+### 3. Development Server
+```bash
+npm run dev
+```
+
+### 4. Automated Tests
+Run the comprehensive Vitest test suite, validating CRUD operations, Zod formatting, security boundaries, and HTTP JSON-RPC 2.0 endpoints:
 ```bash
 npm test
 ```
 
 ---
 
-## Extending the Server
+## Documentation & Architecture
 
-To expose a new table or database action:
-
-1. **Zod Validation & Types:** Add a corresponding schema definition in [src/tools/schemas.ts](file:///Users/aj/mcp-server/src/tools/schemas.ts). TypeScript types in [src/types/database.ts](file:///Users/aj/mcp-server/src/types/database.ts) will automatically be inferred.
-2. **Repository Layer:** Update the `IMetricsRepository` interface and implementation in [src/db/repository.ts](file:///Users/aj/mcp-server/src/db/repository.ts) with the new database query logic.
-3. **Database Handler:** Write your high-level transaction wrapper in [src/tools/handlers.ts](file:///Users/aj/mcp-server/src/tools/handlers.ts) calling the repository.
-4. **Register:** Connect the handler and inject the repository in [src/tools/index.ts](file:///Users/aj/mcp-server/src/tools/index.ts).
-
----
-
-## Roadmap
-
-Future improvements targeting enterprise agent environments:
-* **Multi-database Driver Interface:** Support PostgreSQL and MySQL drivers through a common database abstract factory pattern.
-* **Granular Role-Based Access Control:** Fine-grained API-key permissions or role scopes mapping client sessions to distinct table boundaries.
-* **Transaction Confirmations:** A secure webhook callback system allowing human-in-the-loop validation before committing high-value database modifications.
-* **Observability Interceptors:** OpenTelemetry tracing support to track tool call durations, error rates, and system resource metrics.
+* [System Architecture (`docs/architecture.md`)](docs/architecture.md)
+* [Design Decisions & Engineering Tradeoffs (`docs/design_decisions.md`)](docs/design_decisions.md)
