@@ -86,7 +86,7 @@ Security is paramount when exposing data stores to autonomous agent operations:
 ### 1. Health Check
 ```bash
 curl http://localhost:3000/health
-# → {"status":"HEALTHY","timestamp":"...","service":"mcp-sqlite-bridge","readOnly":false}
+# → {"status":"HEALTHY","timestamp":"...","service":"mcp-sqlite-bridge","readOnly":true}
 ```
 
 ### 2. List MCP Tools (`tools/list`)
