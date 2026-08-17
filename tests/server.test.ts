@@ -3,10 +3,21 @@ import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { Transport } from "@modelcontextprotocol/sdk/shared/transport.js";
 import { JSONRPCMessage } from "@modelcontextprotocol/sdk/types.js";
 
-// Set isolated database path to in-memory BEFORE importing the server
+// These must be set BEFORE src/server.js is evaluated: it reads both at module load.
+//
+// A plain `import` will not do it. ES module imports are hoisted above statements, so
+// the previous `process.env.DB_PATH = ":memory:"` followed by a static import ran too
+// late and the server resolved its default on-disk path instead. A dynamic import is
+// what actually guarantees the ordering.
+//
+// READ_ONLY is opted out explicitly because this file exercises the write tools' input
+// validation. The server is read-only by default (src/config/security.ts); these tests
+// previously received the mutation tools only because an unset variable resolved to
+// read-write, which is the production defect being fixed.
 process.env.DB_PATH = ":memory:";
+process.env.READ_ONLY = "false";
 
-import { server, db } from "../src/server.js";
+const { server, db } = await import("../src/server.js");
 
 /**
  * A clean, type-safe mock transport that facilitates in-memory process piping
