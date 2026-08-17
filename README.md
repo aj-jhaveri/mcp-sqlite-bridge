@@ -76,8 +76,8 @@ When the LLM client receives this feedback, it identifies exactly which fields w
 Security is paramount when exposing data stores to autonomous agent operations:
 
 1. **SQL Injection Prevention:** Every query in the handlers is fully parameterized. Handlers bind raw client values strictly using SQLite parameter bindings (`?`), preventing malicious payloads from altering the SQL statement structure.
-2. **Access Control (`READ_ONLY` Mode):** The server supports a configurable read-only safety boundary. When enabled, mutation tools (`add_database_record`, `update_database_record`) are not registered or exposed, returning an explicit security payload (`MCP_SECURITY_VIOLATION`).
-3. **Local Sovereignty & Transport Flexibility:** Operates securely over local `Stdio` or isolated HTTP endpoints with CORS controls.
+2. **Access Control (`READ_ONLY` Mode):** Read-only is the **default**, not an opt-in. Mutation tools (`add_database_record`, `update_database_record`) are neither registered nor advertised in `tools/list`, and calls to them return an explicit security payload (`MCP_SECURITY_VIOLATION`). Writes require setting `READ_ONLY=false` deliberately; any other value — unset, empty, or misspelled — resolves to read-only, so a missing environment variable cannot silently unlock the database.
+3. **Local Sovereignty & Transport Flexibility:** Operates over local `Stdio` or an HTTP endpoint. Note that the HTTP transport is **unauthenticated and accepts all origins**; it is safe to expose publicly only because the read-only default removes write access. Do not set `READ_ONLY=false` on a publicly reachable instance.
 
 ---
 
@@ -137,6 +137,11 @@ To connect this MCP server to **Claude Desktop**, edit `claude_desktop_config.js
   }
 }
 ```
+
+`READ_ONLY: "false"` above is a deliberate opt-in for **local stdio use**, where the
+only client is your own agent and the database is a local file. Never set it on the
+hosted HTTP deployment: that endpoint is unauthenticated and accepts all origins, so
+write access there is write access for anyone who finds the URL.
 
 ---
 

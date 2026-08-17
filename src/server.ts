@@ -7,6 +7,7 @@ import express, { Request, Response } from "express";
 import cors from "cors";
 
 import { ServerConfig } from "./types/database.js";
+import { resolveReadOnly } from "./config/security.js";
 import { createDatabase } from "./db/database.js";
 import { SqliteMetricsRepository } from "./db/repository.js";
 import { registerTools } from "./tools/index.js";
@@ -26,9 +27,15 @@ if (rawDbPath !== ":memory:" && !path.isAbsolute(rawDbPath)) {
     rawDbPath = path.resolve(__dirname, "..", rawDbPath);
 }
 
+// Read-only is the DEFAULT, not an opt-in — see resolveReadOnly. This server is
+// deployed as a public, unauthenticated endpoint, so an unset or misspelled variable
+// must fail safe. The previous `=== "true"` form meant an absent variable ENABLED the
+// mutation tools, leaving a blocklist in the Netlify proxy as the only thing refusing
+// writes in production — which protects nothing on its own, because this URL is public
+// and a caller can simply not use the proxy.
 const config: ServerConfig = {
     dbPath: rawDbPath,
-    readOnly: process.env.READ_ONLY === "true",
+    readOnly: resolveReadOnly(process.env.READ_ONLY),
 };
 
 const db = await createDatabase(config);
@@ -71,20 +78,25 @@ app.post("/api/mcp", async (req: Request, res: Response) => {
   }
 
   // 1. tools/list
+  //
+  // The advertised surface must match what the server will actually honour. Listing
+  // the mutation tools while READ_ONLY refuses them tells a calling agent it can write,
+  // which is a contract lie: the agent plans around a capability that does not exist and
+  // discovers it only at call time.
   if (method === "tools/list") {
-    return res.json({
-      jsonrpc: "2.0",
-      result: {
-        tools: [
-          {
-            name: "query_data_source",
-            description: "Retrieves metrics records matching the specified category from SQLite database",
-            inputSchema: {
-              type: "object",
-              properties: { category: { type: "string" } },
-              required: ["category"]
-            }
-          },
+    const readTools = [
+      {
+        name: "query_data_source",
+        description: "Retrieves metrics records matching the specified category from SQLite database",
+        inputSchema: {
+          type: "object",
+          properties: { category: { type: "string" } },
+          required: ["category"]
+        }
+      }
+    ];
+
+    const writeTools = [
           {
             name: "add_database_record",
             description: "Adds a new record to the SQLite metrics database",
@@ -116,7 +128,12 @@ app.post("/api/mcp", async (req: Request, res: Response) => {
               required: ["id"]
             }
           }
-        ]
+    ];
+
+    return res.json({
+      jsonrpc: "2.0",
+      result: {
+        tools: config.readOnly ? readTools : [...readTools, ...writeTools]
       },
       id
     });
