@@ -42,11 +42,9 @@ graph TD
 ### Dual Transport Support
 - **Stdio Transport** (`STDIO=true`): Used by local desktop apps (Claude Desktop, Cursor) operating over `stdin`/`stdout`.
 - **Streamable HTTP Transport** (`POST /mcp`): The official MCP HTTP transport, served by the SDK's `StreamableHTTPServerTransport`. Runs **stateless** — a fresh server and transport are constructed per request, since the deploy target is a single instance on an ephemeral filesystem with nowhere to keep session state.
-A hand-rolled `POST /api/mcp` endpoint previously sat alongside these. It was never
-MCP-compliant — no initialize handshake, no capability negotiation, and a `tools/list`
-maintained by hand beside the real registrations, which is how the tool descriptions
-came to be missing without anyone noticing. It has been removed now that its only
-consumer speaks the real protocol.
+
+Both transports are driven by the same tool registrations and the same read-only policy,
+and both are exercised against a real SDK client in CI (`tests/mcp-protocol.test.ts`).
 
 ---
 
