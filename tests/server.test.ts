@@ -11,9 +11,8 @@ import { JSONRPCMessage } from "@modelcontextprotocol/sdk/types.js";
 // what actually guarantees the ordering.
 //
 // READ_ONLY is opted out explicitly because this file exercises the write tools' input
-// validation. The server is read-only by default (src/config/security.ts); these tests
-// previously received the mutation tools only because an unset variable resolved to
-// read-write, which is the production defect being fixed.
+// validation. The server is read-only by default (src/config/security.ts), so the
+// mutation tools are not registered unless a caller asks for them.
 process.env.DB_PATH = ":memory:";
 process.env.READ_ONLY = "false";
 

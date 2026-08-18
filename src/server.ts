@@ -24,10 +24,7 @@ if (rawDbPath !== ":memory:" && !path.isAbsolute(rawDbPath)) {
 
 // Read-only is the DEFAULT, not an opt-in — see resolveReadOnly. This server is
 // deployed as a public, unauthenticated endpoint, so an unset or misspelled variable
-// must fail safe. The previous `=== "true"` form meant an absent variable ENABLED the
-// mutation tools, leaving a blocklist in the Netlify proxy as the only thing refusing
-// writes in production — which protects nothing on its own, because this URL is public
-// and a caller can simply not use the proxy.
+// must fail safe. Writes require an explicit READ_ONLY=false.
 const config: ServerConfig = {
     dbPath: rawDbPath,
     readOnly: resolveReadOnly(process.env.READ_ONLY),
