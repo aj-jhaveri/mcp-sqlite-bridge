@@ -80,7 +80,9 @@ Security is paramount when exposing data stores to autonomous agent operations:
 
 1. **SQL Injection Prevention:** Every query in the handlers is fully parameterized. Handlers bind raw client values strictly using SQLite parameter bindings (`?`), preventing malicious payloads from altering the SQL statement structure.
 2. **Access Control (`READ_ONLY` Mode):** Read-only is the **default**, not an opt-in. Mutation tools (`add_database_record`, `update_database_record`) are neither registered nor advertised in `tools/list`, and calls to them return an explicit security payload (`MCP_SECURITY_VIOLATION`). Writes require setting `READ_ONLY=false` deliberately; any other value — unset, empty, or misspelled — resolves to read-only, so a missing environment variable cannot silently unlock the database.
-3. **Local Sovereignty & Transport Flexibility:** Operates over local `Stdio` or an HTTP endpoint. Note that the HTTP transport is **unauthenticated and accepts all origins**; it is safe to expose publicly only because the read-only default removes write access. Do not set `READ_ONLY=false` on a publicly reachable instance.
+3. **Cost controls on a public endpoint:** The HTTP transport is unauthenticated by design — any MCP client must be able to connect. Read-only means a caller cannot *change* anything; it does not mean a caller cannot *cost* anything, since every tool call reaches SQLite. `/mcp` is therefore bounded two ways: 60 requests/minute per IP, and 300/minute across all callers combined. Per-IP answers one flooder; the global ceiling answers many addresses each staying politely under it.
+4. **Explicit CORS allowlist:** Browser access is restricted to `CORS_ALLOWED_ORIGINS` rather than `*`, so an arbitrary web page cannot drive this server using a visitor's browser. Requests without an `Origin` header — curl, uptime monitors, every non-browser MCP client — pass through untouched.
+5. **Local Sovereignty & Transport Flexibility:** Operates over local `Stdio` or an HTTP endpoint. Do not set `READ_ONLY=false` on a publicly reachable instance.
 
 ---
 

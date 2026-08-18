@@ -5,7 +5,12 @@ import { fileURLToPath } from "url";
 import path from "path";
 import dotenv from "dotenv";
 import express, { Request, Response } from "express";
-import cors from "cors";
+import {
+  corsMiddleware,
+  parseAllowedOrigins,
+  perIpLimiter,
+  globalLimiter,
+} from "./middleware/http.security.js";
 
 import { ServerConfig } from "./types/database.js";
 import { resolveReadOnly } from "./config/security.js";
@@ -57,8 +62,14 @@ const server = createMcpServer();
 
 // Express HTTP Application Server for Remote MCP Protocol Requests
 const app = express();
-app.use(cors());
-app.use(express.json());
+
+// Trust the platform proxy so the rate limiter sees the real client address rather
+// than the load balancer's. Render terminates TLS at one hop.
+app.set("trust proxy", 1);
+
+const allowedOrigins = parseAllowedOrigins(process.env.CORS_ALLOWED_ORIGINS);
+app.use(corsMiddleware(allowedOrigins));
+app.use(express.json({ limit: "64kb" }));
 
 // Health Check Endpoint
 app.get("/health", (_req: Request, res: Response) => {
@@ -88,7 +99,7 @@ app.get("/health", (_req: Request, res: Response) => {
 // protocol-compliant endpoint publicly safe: a real client can discover and
 // call query_data_source, and cannot reach a mutation tool at all.
 // ---------------------------------------------------------------------------
-app.post("/mcp", async (req: Request, res: Response) => {
+app.post("/mcp", globalLimiter, perIpLimiter, async (req: Request, res: Response) => {
   // A fresh server + transport per request. Sharing one transport across
   // requests is the STATEFUL pattern: without a session to scope them, the
   // second request lands on a transport that has already completed its
@@ -145,7 +156,10 @@ if (!STDIO_MODE) {
 
   const PORT = process.env.PORT || 3000;
   app.listen(PORT, () => {
-    console.error(`MCP Server listening on port ${PORT} (MCP endpoint: /mcp)`);
+    console.error(
+      `MCP Server listening on port ${PORT} (MCP endpoint: /mcp, ` +
+      `origins allowed: ${allowedOrigins.length}, rate limits active)`
+    );
   });
 }
 
