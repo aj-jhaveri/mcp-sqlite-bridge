@@ -6,7 +6,7 @@
 [![CI](https://github.com/aj-jhaveri/mcp-sqlite-bridge/actions/workflows/ci.yml/badge.svg)](https://github.com/aj-jhaveri/mcp-sqlite-bridge/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
-A clean, modular Model Context Protocol (MCP) server that enables AI agents to securely interact with local or remote SQLite databases through type-safe, validated tools over both **Stdio** and **HTTP / SSE JSON-RPC 2.0** transports.
+A clean, modular Model Context Protocol (MCP) server that enables AI agents to securely interact with local or remote SQLite databases through type-safe, validated tools over both the **Stdio** and **Streamable HTTP** MCP transports. Any compliant MCP client — Claude Desktop over stdio, or an SDK client over HTTP — can connect, discover the tools, and call them.
 
 **Live Web Demo:** [slakedesign.com/demo/mcp](https://slakedesign.com/demo/mcp)
 
@@ -22,12 +22,12 @@ Rather than engineering monolithic API integrations for every custom application
 
 ## Architecture
 
-This project implements a modular, layered architecture supporting dual transport layers (`Stdio` for local desktop clients and `HTTP JSON-RPC 2.0` for web applications and cloud deployments):
+This project implements a modular, layered architecture supporting both official MCP transports (`Stdio` for local desktop clients and `Streamable HTTP` for remote clients and cloud deployments):
 
 ```mermaid
 graph TD
     Client1[Claude Desktop] <-->|JSON-RPC 2.0 over Stdio| StdioTransport[Stdio Transport]
-    Client2[Web App / Remote Agent] <-->|HTTP POST /api/mcp| HttpTransport[HTTP JSON-RPC 2.0 Express Transport]
+    Client2[Remote MCP Client] <-->|Streamable HTTP POST /mcp| HttpTransport[StreamableHTTPServerTransport]
     
     StdioTransport <-->|MCP Protocol SDK| Server[MCP Server Router]
     HttpTransport <-->|MCP Protocol SDK| Server
@@ -40,8 +40,11 @@ graph TD
 ```
 
 ### Dual Transport Support
-- **Stdio Transport**: Used by local desktop apps (Claude Desktop, Cursor) operating over `stdin`/`stdout`.
-- **HTTP / SSE Transport**: Express server exposing `POST /api/mcp` and `GET /health` with full CORS support for browser clients and cloud deployments.
+- **Stdio Transport** (`STDIO=true`): Used by local desktop apps (Claude Desktop, Cursor) operating over `stdin`/`stdout`.
+- **Streamable HTTP Transport** (`POST /mcp`): The official MCP HTTP transport, served by the SDK's `StreamableHTTPServerTransport`. Runs **stateless** — a fresh server and transport are constructed per request, since the deploy target is a single instance on an ephemeral filesystem with nowhere to keep session state.
+- **Legacy JSON-RPC endpoint** (`POST /api/mcp`): A hand-rolled endpoint predating the transport above. It is *not* MCP-compliant — no initialize handshake, no capability negotiation — and is retained only because the slakedesign.com demo proxy posts to it directly. New clients should use `/mcp`.
+
+Both endpoints are served by the same tool implementations and the same read-only policy.
 
 ---
 
@@ -81,7 +84,50 @@ Security is paramount when exposing data stores to autonomous agent operations:
 
 ---
 
-## REST & HTTP API Usage (JSON-RPC 2.0)
+## Connecting a Real MCP Client
+
+The repo ships a working MCP client (`src/client/mcp-client.ts`) built on the official
+SDK. Unlike a hand-written JSON-RPC POST, it performs the real initialize handshake and
+capability negotiation, so it works against this server the same way it would against
+any other MCP server.
+
+```bash
+npm run build
+
+# stdio — launches dist/server.js as a subprocess, exactly as Claude Desktop does
+npm run client
+
+# Streamable HTTP — against a running server
+npm start &
+npm run client -- --http
+
+# ...or a remote deployment
+npm run client -- --http --url https://your-host.example.com/mcp
+
+# query a different category
+npm run client -- --category headcount
+```
+
+Expected output under the default (read-only) posture:
+
+```text
+Connected to slake-sqlite-tools v1.0.0
+
+Tools advertised (1):
+  - query_data_source: Retrieve metrics records from the SQLite database...
+
+Write tools advertised: false
+```
+
+`tests/mcp-protocol.test.ts` drives this same client against both transports as an
+integration test, so protocol compliance is verified in CI rather than assumed.
+
+---
+
+## Legacy HTTP API (JSON-RPC 2.0)
+
+> These examples target `POST /api/mcp`, the non-compliant legacy endpoint retained for
+> the existing web demo. For anything new, use the MCP client above against `/mcp`.
 
 ### 1. Health Check
 ```bash
