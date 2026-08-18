@@ -1,5 +1,6 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
+import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
 import { fileURLToPath } from "url";
 import path from "path";
 import dotenv from "dotenv";
@@ -41,13 +42,27 @@ const config: ServerConfig = {
 const db = await createDatabase(config);
 const repo = new SqliteMetricsRepository(db);
 
-const server = new McpServer({
-    name: "slake-sqlite-tools",
-    version: "1.0.0",
-});
+/**
+ * Builds a fully-configured MCP server bound to the shared repository.
+ *
+ * A factory rather than a single instance because the Streamable HTTP transport
+ * runs statelessly: each request gets its own server + transport pair, so
+ * concurrent callers cannot collide on in-flight request IDs. The database and
+ * repository are shared — only the protocol layer is per-request, which is cheap.
+ */
+function createMcpServer(): McpServer {
+    const instance = new McpServer({
+        name: "slake-sqlite-tools",
+        version: "1.0.0",
+    });
 
-setupErrorFormatting(server);
-registerTools(server, repo, config);
+    setupErrorFormatting(instance);
+    registerTools(instance, repo, config);
+    return instance;
+}
+
+// The long-lived instance backing the stdio transport and the test suite.
+const server = createMcpServer();
 
 // Express HTTP Application Server for Remote MCP Protocol Requests
 const app = express();
@@ -65,7 +80,53 @@ app.get("/health", (_req: Request, res: Response) => {
   });
 });
 
+// ---------------------------------------------------------------------------
+// /mcp - the real MCP Streamable HTTP transport.
+//
+// This is the endpoint an actual MCP client connects to. It performs the full
+// protocol handshake (initialize, capability negotiation, tools/list, tools/call)
+// via the SDK's own transport, rather than the hand-rolled JSON-RPC switch below.
+//
+// Stateless (`sessionIdGenerator: undefined`) because the deploy target runs a
+// single instance on an ephemeral filesystem: there is nowhere to keep session
+// state, and nothing that needs it. `enableJsonResponse` returns plain JSON
+// instead of holding an SSE stream open, which suits a request/response demo
+// backend and avoids long-lived connections on a small instance.
+//
+// The read-only default in src/config/security.ts is what makes exposing a
+// protocol-compliant endpoint publicly safe: a real client can discover and
+// call query_data_source, and cannot reach a mutation tool at all.
+// ---------------------------------------------------------------------------
+app.post("/mcp", async (req: Request, res: Response) => {
+  // A fresh server + transport per request. Sharing one transport across
+  // requests is the STATEFUL pattern: without a session to scope them, the
+  // second request lands on a transport that has already completed its
+  // lifecycle and the handler fails with a 500. Statelessness is what makes
+  // this safe on an ephemeral single instance, and per-request construction is
+  // what makes statelessness correct.
+  const requestServer = createMcpServer();
+  const transport = new StreamableHTTPServerTransport({
+    sessionIdGenerator: undefined,
+    enableJsonResponse: true,
+  });
+
+  res.on("close", () => {
+    void transport.close();
+    void requestServer.close();
+  });
+
+  await requestServer.connect(transport);
+  // express.json() has already consumed the body, so it is passed through
+  // explicitly rather than letting the transport re-read the stream.
+  await transport.handleRequest(req, res, req.body);
+});
+
 // JSON-RPC 2.0 MCP Endpoint
+//
+// LEGACY. Predates the Streamable HTTP transport above and is not MCP-compliant:
+// no initialize handshake, no capability negotiation, a hand-written tools/list.
+// Retained because the slakedesign.com demo proxy posts to it directly; new
+// clients should use /mcp. Both are served by the same tool implementations.
 app.post("/api/mcp", async (req: Request, res: Response) => {
   const { jsonrpc, method, params, id } = req.body || {};
 
@@ -195,7 +256,7 @@ app.post("/api/mcp", async (req: Request, res: Response) => {
 
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
-  console.error(`MCP Server HTTP JSON-RPC 2.0 listening on port ${PORT}`);
+  console.error(`MCP Server listening on port ${PORT} (MCP: /mcp, legacy JSON-RPC: /api/mcp)`);
 });
 
 async function runServer() {
