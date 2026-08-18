@@ -161,10 +161,19 @@ To connect this MCP server to **Claude Desktop**, edit `claude_desktop_config.js
 }
 ```
 
-`READ_ONLY: "false"` above is a deliberate opt-in for **local stdio use**, where the
-only client is your own agent and the database is a local file. Never set it on the
-hosted HTTP deployment: that endpoint is unauthenticated and accepts all origins, so
-write access there is write access for anyone who finds the URL.
+**`"STDIO": "true"` is required.** Without it the process serves HTTP instead of the
+stdio transport, so the client waits for a handshake that never arrives and reports
+only `Connection closed`. The server now prints an explicit warning to stderr when it
+detects this (piped stdin, `STDIO` unset), which the client surfaces in its logs.
+
+`READ_ONLY: "false"` is a deliberate opt-in for **local stdio use**, where the only
+client is your own agent and the database is a local file. Never set it on the hosted
+HTTP deployment: that endpoint is unauthenticated and accepts all origins, so write
+access there is write access for anyone who finds the URL. Omit it entirely to run the
+local client read-only too.
+
+In stdio mode the process does **not** bind a TCP port. HTTP remains the default, so
+the deployed service needs no configuration.
 
 ---
 
