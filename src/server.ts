@@ -115,10 +115,37 @@ app.post("/mcp", async (req: Request, res: Response) => {
   await transport.handleRequest(req, res, req.body);
 });
 
-const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => {
-  console.error(`MCP Server listening on port ${PORT} (MCP: /mcp, legacy JSON-RPC: /api/mcp)`);
-});
+// The two transports are mutually exclusive, and stdio must not bind a port.
+//
+// An MCP client (Claude Desktop, Cursor) launches this file as a subprocess and
+// speaks over its pipes. Binding a TCP port there is at best pointless and at worst
+// fatal: if the port is already taken the process exits with EADDRINUSE before the
+// handshake, and the client reports only "Connection closed" — the same message it
+// gives for every other startup failure, which makes the real cause invisible.
+//
+// HTTP stays the default so the deployed service needs no configuration.
+const STDIO_MODE = process.env.STDIO === "true";
+
+if (!STDIO_MODE) {
+  // A client launching this as a subprocess gives it piped stdin; a human running it
+  // in a terminal does not. If stdin is piped and STDIO was not set, this is almost
+  // certainly an MCP client whose config is missing the variable — it will now sit
+  // waiting for a handshake that this process is never going to send, and report only
+  // "Connection closed". Say so on stderr, where the client surfaces server logs.
+  if (!process.stdin.isTTY) {
+    console.error(
+      'WARNING: started without STDIO=true but stdin is not a TTY. If an MCP client ' +
+      'launched this process, it will hang and then report "Connection closed": this ' +
+      'process is serving HTTP, not the stdio transport. Add "env": { "STDIO": "true" } ' +
+      'to the server entry in your MCP client config.'
+    );
+  }
+
+  const PORT = process.env.PORT || 3000;
+  app.listen(PORT, () => {
+    console.error(`MCP Server listening on port ${PORT} (MCP endpoint: /mcp)`);
+  });
+}
 
 async function runServer() {
   const transport = new StdioServerTransport();
@@ -157,7 +184,7 @@ const isMain = process.argv[1] && (
   process.argv[1].endsWith("dist/server.js")
 );
 
-if (isMain && process.env.STDIO === "true") {
+if (isMain && STDIO_MODE) {
   runServer().catch((error) => {
     console.error("Fatal error starting stdio MCP server:", error);
   });
