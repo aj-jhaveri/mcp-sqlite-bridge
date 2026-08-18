@@ -132,7 +132,12 @@ if (!STDIO_MODE) {
   // certainly an MCP client whose config is missing the variable — it will now sit
   // waiting for a handshake that this process is never going to send, and report only
   // "Connection closed". Say so on stderr, where the client surfaces server logs.
-  if (!process.stdin.isTTY) {
+  // PORT is set by every hosting platform and by nothing an MCP client does, so it
+  // distinguishes a deployed container (non-TTY stdin, legitimately serving HTTP) from
+  // a client subprocess whose config is missing STDIO. Without this check the warning
+  // fired on every healthy production boot, which is worse than not warning at all:
+  // a log line that cries wolf on success trains readers to ignore it.
+  if (!process.stdin.isTTY && !process.env.PORT) {
     console.error(
       'WARNING: started without STDIO=true but stdin is not a TTY. If an MCP client ' +
       'launched this process, it will hang and then report "Connection closed": this ' +
