@@ -2,12 +2,11 @@ import { describe, it, expect } from "vitest";
 import { resolveReadOnly } from "../src/config/security.js";
 
 /**
- * These pin the DEFAULT, which is what actually failed in production.
+ * Pins the DEFAULT posture, not just the gating that depends on it.
  *
- * The existing security suite verified that registerTools gates the mutation tools on
- * config.readOnly, and it did — but it constructed that flag by hand. Nothing asserted
- * how the flag is derived from the environment, so `READ_ONLY === "true"` shipped with
- * an unset variable resolving to read-WRITE on a public, unauthenticated endpoint.
+ * The security suite verifies that registerTools withholds the mutation tools when the
+ * flag is set. That leaves the derivation of the flag itself unasserted, which is what
+ * these cover.
  */
 describe("resolveReadOnly — fail-safe posture", () => {
     it("is read-only when the variable is unset", () => {
