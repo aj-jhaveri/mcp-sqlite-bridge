@@ -42,9 +42,11 @@ graph TD
 ### Dual Transport Support
 - **Stdio Transport** (`STDIO=true`): Used by local desktop apps (Claude Desktop, Cursor) operating over `stdin`/`stdout`.
 - **Streamable HTTP Transport** (`POST /mcp`): The official MCP HTTP transport, served by the SDK's `StreamableHTTPServerTransport`. Runs **stateless** — a fresh server and transport are constructed per request, since the deploy target is a single instance on an ephemeral filesystem with nowhere to keep session state.
-- **Legacy JSON-RPC endpoint** (`POST /api/mcp`): A hand-rolled endpoint predating the transport above. It is *not* MCP-compliant — no initialize handshake, no capability negotiation — and is retained only because the slakedesign.com demo proxy posts to it directly. New clients should use `/mcp`.
-
-Both endpoints are served by the same tool implementations and the same read-only policy.
+A hand-rolled `POST /api/mcp` endpoint previously sat alongside these. It was never
+MCP-compliant — no initialize handshake, no capability negotiation, and a `tools/list`
+maintained by hand beside the real registrations, which is how the tool descriptions
+came to be missing without anyone noticing. It has been removed now that its only
+consumer speaks the real protocol.
 
 ---
 
@@ -124,42 +126,17 @@ integration test, so protocol compliance is verified in CI rather than assumed.
 
 ---
 
-## Legacy HTTP API (JSON-RPC 2.0)
+## Health Check
 
-> These examples target `POST /api/mcp`, the non-compliant legacy endpoint retained for
-> the existing web demo. For anything new, use the MCP client above against `/mcp`.
-
-### 1. Health Check
 ```bash
 curl http://localhost:3000/health
 # → {"status":"HEALTHY","timestamp":"...","service":"mcp-sqlite-bridge","readOnly":true}
 ```
 
-### 2. List MCP Tools (`tools/list`)
-```bash
-curl -X POST http://localhost:3000/api/mcp \
-  -H "Content-Type: application/json" \
-  -d '{
-    "jsonrpc": "2.0",
-    "method": "tools/list",
-    "id": 1
-  }'
-```
-
-### 3. Call MCP Read Tool (`tools/call`)
-```bash
-curl -X POST http://localhost:3000/api/mcp \
-  -H "Content-Type: application/json" \
-  -d '{
-    "jsonrpc": "2.0",
-    "method": "tools/call",
-    "params": {
-      "name": "query_data_source",
-      "arguments": { "category": "engineering_delivery" }
-    },
-    "id": 2
-  }'
-```
+`/health` is a plain operational endpoint, deliberately not an MCP call: asking whether
+the service is up should not require a protocol handshake that would itself fail when
+the answer is no. Every other interaction goes through `/mcp` — see the client section
+above.
 
 ---
 
