@@ -1,7 +1,7 @@
 {
   "name": "mcp-server",
   "version": "1.0.0",
-  "description": "A Model Context Protocol server giving LLM agents type-safe read/write access to a local SQLite database",
+  "description": "A Model Context Protocol server giving LLM agents type-safe, read-only access to a local SQLite database by default; write tools are registered only when started with READ_ONLY=false",
   "main": "dist/server.js",
   "engines": {
     "node": "22.12.0"
