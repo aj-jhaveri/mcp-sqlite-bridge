@@ -6,7 +6,7 @@
 [![CI](https://github.com/aj-jhaveri/mcp-sqlite-bridge/actions/workflows/ci.yml/badge.svg)](https://github.com/aj-jhaveri/mcp-sqlite-bridge/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
-A clean, modular Model Context Protocol (MCP) server that enables AI agents to securely interact with local or remote SQLite databases through type-safe, validated tools over both the **Stdio** and **Streamable HTTP** MCP transports. Any compliant MCP client — Claude Desktop over stdio, or an SDK client over HTTP — can connect, discover the tools, and call them.
+A clean, modular Model Context Protocol (MCP) server that gives AI agents read-only access to local or remote SQLite databases by default, through type-safe, validated tools over both the **Stdio** and **Streamable HTTP** MCP transports. Any compliant MCP client — Claude Desktop over stdio, or an SDK client over HTTP — can connect, discover the tools, and call them.
 
 **Live Web Demo:** [slakedesign.com/demo/mcp](https://slakedesign.com/demo/mcp)
 
