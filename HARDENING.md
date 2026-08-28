@@ -145,6 +145,38 @@ human-facing CLI demo whose output is its product.
 
 ---
 
+## Production rollout
+
+Deployed 2026-08-28 by auto-deploy on merge to `main`. See
+[DEPLOYMENT.md](DEPLOYMENT.md) for the runbook.
+
+**What shipped:** the handler-level read-only guard, the error-leakage fix, the
+repaired demo, and structured logging on stderr with correlation IDs.
+
+**The deploy was clean** — no failed builds, no rollback. Verified against the
+live service and through the Netlify proxy the demo page actually uses:
+`/health` returns `readOnly: true` and carries `x-correlation-id`; the
+Streamable HTTP handshake completes; `tools/list` advertises exactly
+`["query_data_source"]` with neither mutation tool present.
+
+**One latent fragility found while writing the runbook**, not caused by this
+work but worth recording: the build command is `npm install && npm run build`
+with no `--include=dev`, and `typescript` is a `devDependency`. It works only
+because `NODE_ENV` is not set to `production` on this service. Setting that
+variable — an entirely reasonable thing for someone to do — would break the
+build. The sibling repos hit exactly this and use
+`npm ci --include=dev && … && npm prune --omit=dev`. Documented rather than
+changed, because changing a working build command during a rollout is the wrong
+time to find out something else depended on it.
+
+**What to monitor.** `tools/list` must never advertise a mutation tool; that is
+the single check that proves the read-only posture is intact end to end, and it
+is cheap enough to run on a schedule. Beyond that, the rate limiters
+(60/min per IP, 300/min global) bound cost on an unauthenticated endpoint — a
+sustained 429 rate is the signal that someone is looping the endpoint.
+
+---
+
 ## Method
 
 Every fix was preceded by a guard that was **run against the unfixed code and
