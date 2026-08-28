@@ -8,6 +8,11 @@ import { createDatabase } from "../src/db/database.js";
 import { SqliteMetricsRepository } from "../src/db/repository.js";
 import { registerTools } from "../src/tools/index.js";
 import { setupErrorFormatting } from "../src/middleware/error-handler.js";
+import {
+    handleQueryDataSource,
+    handleAddDatabaseRecord,
+    handleUpdateDatabaseRecord,
+} from "../src/tools/handlers.js";
 
 /**
  * A clean, type-safe mock transport that facilitates in-memory process piping
@@ -232,5 +237,138 @@ describe("MCP SQLite Bridge Security & Isolation Suite", () => {
             expect(updatedRecord.status).toBe("Warning");
             expect(updatedRecord.detail_one).toBe("89% peak spikes");
         });
+    });
+});
+
+/**
+ * Defence in depth: the handler-level read-only guard.
+ *
+ * Registration is the primary gate, and the tests above prove it holds. But
+ * registration is a SINGLE point of failure - one `server.tool(...)` placed
+ * outside the `if (!config.readOnly)` block in tools/index.ts and writes are
+ * live with nothing else in the way. That is a plausible edit for anyone adding
+ * a tool later, and it would not be obvious in review.
+ *
+ * These tests bypass registration entirely and call the handlers directly, the
+ * way a mis-registered tool would reach them. They are what makes the README's
+ * "enforced in two independent places" claim checkable rather than aspirational.
+ */
+describe("Read-only enforcement inside the handlers", () => {
+    const repo = {
+        queryByCategory: async () => [],
+        addRecord: async () => {
+            throw new Error("addRecord must never be reached on a read-only server");
+        },
+        updateRecord: async () => {
+            throw new Error("updateRecord must never be reached on a read-only server");
+        },
+    };
+
+    const readOnlyConfig = { dbPath: ":memory:", readOnly: true };
+    const writableConfig = { dbPath: ":memory:", readOnly: false };
+
+    it("refuses an insert without touching the repository", async () => {
+        const res = await handleAddDatabaseRecord(
+            repo,
+            { category: "headcount", key_name: "k", status: "s" } as never,
+            readOnlyConfig
+        );
+
+        expect(res.isError).toBe(true);
+        expect(res.content[0].text).toContain("read-only mode");
+        expect(res.content[0].text).toContain("No data was modified");
+    });
+
+    it("refuses an update without touching the repository", async () => {
+        const res = await handleUpdateDatabaseRecord(
+            repo,
+            { id: 1, status: "changed" } as never,
+            readOnlyConfig
+        );
+
+        expect(res.isError).toBe(true);
+        expect(res.content[0].text).toContain("read-only mode");
+    });
+
+    it("refuses before argument validation, so a valid payload is not a bypass", async () => {
+        // The guard must be the first thing in the handler. If it ran after the
+        // "at least one field" check, a caller could tell read-only apart from
+        // a validation failure - and worse, ordering bugs here are how guards
+        // silently stop applying.
+        const res = await handleUpdateDatabaseRecord(repo, { id: 1 } as never, readOnlyConfig);
+        expect(res.content[0].text).toContain("read-only mode");
+        expect(res.content[0].text).not.toContain("At least one update field");
+    });
+
+    it("does not refuse when the server is writable", async () => {
+        // The guard must not over-trigger: with readOnly false the handler
+        // proceeds to the repository, which is what throws here.
+        const res = await handleAddDatabaseRecord(
+            repo,
+            { category: "headcount", key_name: "k", status: "s" } as never,
+            writableConfig
+        );
+
+        expect(res.isError).toBe(true);
+        expect(res.content[0].text).not.toContain("read-only mode");
+    });
+});
+
+/**
+ * Internal error text must not reach the caller.
+ *
+ * The consumer of a tool error is an LLM. SQLite driver strings can echo schema
+ * details and filesystem paths, and a model has no way to tell an internal
+ * fault string from instructions.
+ */
+describe("Error responses do not leak internal detail", () => {
+    const leakyMessage = "SQLITE_CANTOPEN: unable to open database file /srv/secret/mcp_database.db";
+
+    const failingRepo = {
+        queryByCategory: async () => { throw new Error(leakyMessage); },
+        addRecord: async () => { throw new Error(leakyMessage); },
+        updateRecord: async () => { throw new Error(leakyMessage); },
+    };
+
+    const writableConfig = { dbPath: ":memory:", readOnly: false };
+
+    it("does not surface driver text from a failed query", async () => {
+        const res = await handleQueryDataSource(failingRepo, { category: "headcount" });
+        expect(res.isError).toBe(true);
+        expect(res.content[0].text).not.toContain("SQLITE_CANTOPEN");
+        expect(res.content[0].text).not.toContain("/srv/secret");
+    });
+
+    it("does not surface driver text from a failed insert", async () => {
+        const res = await handleAddDatabaseRecord(
+            failingRepo,
+            { category: "headcount", key_name: "k", status: "s" } as never,
+            writableConfig
+        );
+        expect(res.isError).toBe(true);
+        expect(res.content[0].text).not.toContain("SQLITE_CANTOPEN");
+        expect(res.content[0].text).not.toContain("/srv/secret");
+    });
+
+    it("does not surface driver text from a failed update", async () => {
+        const res = await handleUpdateDatabaseRecord(
+            failingRepo,
+            { id: 1, status: "x" } as never,
+            writableConfig
+        );
+        expect(res.isError).toBe(true);
+        expect(res.content[0].text).not.toContain("SQLITE_CANTOPEN");
+        expect(res.content[0].text).not.toContain("/srv/secret");
+    });
+
+    it("still tells the agent what happened and whether to retry", async () => {
+        // Refusing to leak must not degrade into an opaque error. The message
+        // is written for a model deciding what to do next.
+        const res = await handleAddDatabaseRecord(
+            failingRepo,
+            { category: "headcount", key_name: "k", status: "s" } as never,
+            writableConfig
+        );
+        expect(res.content[0].text).toContain("No record was created");
     });
 });
