@@ -213,6 +213,34 @@ npm test
 
 ---
 
+## Design & Reliability Notes
+
+**Production-shaped.** Read-only by default, failing safe: any value but an
+explicit `READ_ONLY=false` resolves to read-only, and write access is enforced
+twice — mutation tools are never registered, and both handlers re-check
+independently of how they were reached. Every query is parameterised and every
+tool argument is Zod-validated at the protocol boundary. Internal error text
+never reaches the caller. Structured logging pinned to stderr so it cannot
+corrupt the stdio JSON-RPC channel, with correlation IDs on the HTTP transport.
+Protocol conformance is tested against a real SDK client over **both** transports.
+
+**Demo-only, and why.** The HTTP endpoint is unauthenticated by design, because
+any MCP client must be able to connect — which is safe only because of the
+read-only default. The data is seeded fixture data about a fictional company.
+Storage is ephemeral. There are no query timeouts or connection pooling: a
+single local SQLite file with a bounded dataset does not need them.
+
+**What was fixed, and what it taught me.** See [HARDENING.md](HARDENING.md).
+The worst defect was not in the code — it was a README claiming a security
+payload (`MCP_SECURITY_VIOLATION`) that existed nowhere in the codebase, while
+the real behaviour was arguably better than the invented one. That is the lesson
+that generalised: documentation is part of the system contract, and an unbacked
+claim is a defect even when the code underneath is sound. Every security claim
+in this README now names the file that enforces it and the test that fails if it
+stops being true.
+
+---
+
 ## Documentation & Architecture
 
 * [System Architecture (`docs/architecture.md`)](docs/architecture.md)
