@@ -46,14 +46,19 @@ const repo = new SqliteMetricsRepository(db);
  * concurrent callers cannot collide on in-flight request IDs. The database and
  * repository are shared — only the protocol layer is per-request, which is cheap.
  */
-function createMcpServer(): McpServer {
+export function createMcpServer(overrides: Partial<ServerConfig> = {}): McpServer {
+    // Overrides exist so a caller that is not the deployed process - the demo,
+    // a test - can build a server with a different posture without reaching
+    // into module state or mutating process.env before import.
+    const instanceConfig: ServerConfig = { ...config, ...overrides };
+
     const instance = new McpServer({
         name: "slake-sqlite-tools",
         version: "1.0.0",
     });
 
     setupErrorFormatting(instance);
-    registerTools(instance, repo, config);
+    registerTools(instance, repo, instanceConfig);
     return instance;
 }
 
@@ -134,7 +139,18 @@ app.post("/mcp", globalLimiter, perIpLimiter, async (req: Request, res: Response
 // HTTP stays the default so the deployed service needs no configuration.
 const STDIO_MODE = process.env.STDIO === "true";
 
-if (!STDIO_MODE) {
+// True only when this file is the process entrypoint. Importing it - from the
+// demo, or from a test - must not start a listener: binding a port is a side
+// effect of RUNNING the server, not of loading it, and an imported listener
+// fails with EADDRINUSE the moment anything else holds the port.
+const isMain = process.argv[1] && (
+  process.argv[1] === fileURLToPath(import.meta.url) ||
+  process.argv[1].endsWith("/server.ts") ||
+  process.argv[1].endsWith("/server.js") ||
+  process.argv[1].endsWith("dist/server.js")
+);
+
+if (isMain && !STDIO_MODE) {
   // A client launching this as a subprocess gives it piped stdin; a human running it
   // in a terminal does not. If stdin is piped and STDIO was not set, this is almost
   // certainly an MCP client whose config is missing the variable — it will now sit
@@ -192,13 +208,6 @@ const cleanup = async () => {
 
 process.on("SIGINT", cleanup);
 process.on("SIGTERM", cleanup);
-
-const isMain = process.argv[1] && (
-  process.argv[1] === fileURLToPath(import.meta.url) ||
-  process.argv[1].endsWith("/server.ts") ||
-  process.argv[1].endsWith("/server.js") ||
-  process.argv[1].endsWith("dist/server.js")
-);
 
 if (isMain && STDIO_MODE) {
   runServer().catch((error) => {

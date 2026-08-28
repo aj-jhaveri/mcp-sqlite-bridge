@@ -45,7 +45,7 @@ export function registerTools(
             "not advertise this tool at all.",
             AddDatabaseRecordSchema,
             async (args) => {
-                return handleAddDatabaseRecord(repo, args);
+                return handleAddDatabaseRecord(repo, args, config);
             }
         );
 
@@ -56,7 +56,7 @@ export function registerTools(
             "default deployment refuses writes and does not advertise this tool at all.",
             UpdateDatabaseRecordSchema,
             async (args) => {
-                return handleUpdateDatabaseRecord(repo, args);
+                return handleUpdateDatabaseRecord(repo, args, config);
             }
         );
     } else {

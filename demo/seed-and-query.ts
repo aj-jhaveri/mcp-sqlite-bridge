@@ -1,4 +1,15 @@
-import { server, db } from "../src/server.js";
+import { createMcpServer, db } from "../src/server.js";
+
+/**
+ * The demo exercises the full CRUD lifecycle, so it needs a writable server.
+ *
+ * It used to import the shared read-only instance and call add_database_record
+ * on it, which failed at step 2 with "Tool add_database_record not found" -
+ * `npm run demo` had been broken. Building a writable server here is the honest
+ * fix: it does not weaken the deployed default, and it makes the demo's write
+ * posture visible at the point where writes are actually performed.
+ */
+const server = createMcpServer({ readOnly: false });
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { Transport } from "@modelcontextprotocol/sdk/shared/transport.js";
 import { JSONRPCMessage } from "@modelcontextprotocol/sdk/types.js";

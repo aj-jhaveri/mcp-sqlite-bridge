@@ -211,7 +211,18 @@ describe("MCP SQLite Bridge Server", () => {
             });
 
             expect(result.isError).toBe(true);
-            expect(result.content[0].text).toContain("Database error querying data source");
+
+            // The contract is no longer a message prefix - it is that the
+            // driver's own text never reaches the caller. This tool's consumer
+            // is an LLM, and "SQLITE_MISUSE: Database is closed" tells it
+            // nothing useful while exposing internals.
+            expect(result.content[0].text).not.toContain("SQLITE_MISUSE");
+            expect(result.content[0].text).not.toContain("Database is closed");
+
+            // It must still be actionable: the agent needs to know the call
+            // failed server-side and that retrying will not help.
+            expect(result.content[0].text).toContain("could not be queried");
+            expect(result.content[0].text).toContain("server-side fault");
         });
     });
 });
