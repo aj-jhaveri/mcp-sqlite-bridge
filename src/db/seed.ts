@@ -1,4 +1,5 @@
 import sqlite3 from "sqlite3";
+import { logger } from "../logging/logger.js";
 
 /**
  * Seeds mock/demo data into the metrics_and_data table if it is completely empty.
@@ -7,12 +8,12 @@ export function seedDatabase(db: sqlite3.Database): Promise<void> {
     return new Promise((resolve, reject) => {
         db.get("SELECT COUNT(*) as count FROM metrics_and_data", (err, row: { count: number } | undefined) => {
             if (err) {
-                console.error("Failed to check if database needs seeding:", err.message);
+                logger.error({ errMessage: err.message }, "Failed to check if database needs seeding");
                 return reject(err);
             }
 
             if (row && row.count === 0) {
-                console.error("Log: Seeding SQLite database with initial records...");
+                logger.info("Seeding SQLite database with initial records");
                 const stmt = db.prepare(`
                     INSERT INTO metrics_and_data (category, key_name, status, detail_one, detail_two) 
                     VALUES (?, ?, ?, ?, ?)
@@ -33,7 +34,7 @@ export function seedDatabase(db: sqlite3.Database): Promise<void> {
 
                     stmt.finalize((finalizeErr) => {
                         if (finalizeErr) {
-                            console.error("Error finalizing database seeding statements:", finalizeErr.message);
+                            logger.error({ errMessage: finalizeErr.message }, "Error finalizing database seeding statements");
                             return reject(finalizeErr);
                         }
                         resolve();

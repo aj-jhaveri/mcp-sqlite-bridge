@@ -4,6 +4,7 @@ import path from "path";
 import { ServerConfig } from "../types/database.js";
 import { CREATE_TABLE_SQL } from "./schema.js";
 import { seedDatabase } from "./seed.js";
+import { logger } from "../logging/logger.js";
 
 /**
  * Validates file system write access for the given SQLite database path.
@@ -50,7 +51,7 @@ export async function createDatabase(config: ServerConfig): Promise<sqlite3.Data
         db.serialize(() => {
             db.run(CREATE_TABLE_SQL, async (err) => {
                 if (err) {
-                    console.error("Database schema initialization failed:", err.message);
+                    logger.error({ errMessage: err.message }, "Database schema initialization failed");
                     return reject(err);
                 }
 

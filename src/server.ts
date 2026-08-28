@@ -12,12 +12,14 @@ import {
   globalLimiter,
 } from "./middleware/http.security.js";
 
+import { correlationMiddleware } from "./logging/context.js";
 import { ServerConfig } from "./types/database.js";
 import { resolveReadOnly } from "./config/security.js";
 import { createDatabase } from "./db/database.js";
 import { SqliteMetricsRepository } from "./db/repository.js";
 import { registerTools } from "./tools/index.js";
 import { setupErrorFormatting } from "./middleware/error-handler.js";
+import { logger } from "./logging/logger.js";
 dotenv.config({ quiet: true });
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -71,6 +73,10 @@ const app = express();
 // Trust the platform proxy so the rate limiter sees the real client address rather
 // than the load balancer's. Render terminates TLS at one hop.
 app.set("trust proxy", 1);
+
+// First in the chain, so every downstream log line - including the tool
+// handlers reached through /mcp - is tagged with the request's correlation ID.
+app.use(correlationMiddleware);
 
 const allowedOrigins = parseAllowedOrigins(process.env.CORS_ALLOWED_ORIGINS);
 app.use(corsMiddleware(allowedOrigins));
@@ -162,8 +168,8 @@ if (isMain && !STDIO_MODE) {
   // fired on every healthy production boot, which is worse than not warning at all:
   // a log line that cries wolf on success trains readers to ignore it.
   if (!process.stdin.isTTY && !process.env.PORT) {
-    console.error(
-      'WARNING: started without STDIO=true but stdin is not a TTY. If an MCP client ' +
+    logger.warn(
+      'Started without STDIO=true but stdin is not a TTY. If an MCP client ' +
       'launched this process, it will hang and then report "Connection closed": this ' +
       'process is serving HTTP, not the stdio transport. Add "env": { "STDIO": "true" } ' +
       'to the server entry in your MCP client config.'
@@ -172,9 +178,12 @@ if (isMain && !STDIO_MODE) {
 
   const PORT = process.env.PORT || 3000;
   app.listen(PORT, () => {
-    console.error(
-      `MCP Server listening on port ${PORT} (MCP endpoint: /mcp, ` +
-      `origins allowed: ${allowedOrigins.length}, rate limits active)`
+    // The literal "listening on port" is load-bearing: tests/mcp-protocol.test.ts
+    // spawns this server and waits for that substring on stderr before
+    // connecting. Keep it in the message if this line is ever reworded.
+    logger.info(
+      { port: PORT, endpoint: '/mcp', originsAllowed: allowedOrigins.length },
+      `MCP Server listening on port ${PORT}`
     );
   });
 }
@@ -182,23 +191,23 @@ if (isMain && !STDIO_MODE) {
 async function runServer() {
   const transport = new StdioServerTransport();
   await server.connect(transport);
-  console.error("MCP Server running on Stdio with SQLite");
+  logger.info({ transport: "stdio" }, "MCP Server running on Stdio with SQLite");
 }
 
 const cleanup = async () => {
-  console.error("\nLog: Shutting down MCP server gracefully...");
+  logger.info("Shutting down MCP server gracefully");
   try {
     await server.close();
   } catch (err) {
-    console.error("Error closing MCP server:", err instanceof Error ? err.message : String(err));
+    logger.error({ errMessage: err instanceof Error ? err.message : String(err) }, "Error closing MCP server");
   }
 
   await new Promise<void>((resolve) => {
     db.close((err) => {
       if (err) {
-        console.error("Error closing SQLite database:", err.message);
+        logger.error({ errMessage: err.message }, "Error closing SQLite database");
       } else {
-        console.error("Log: SQLite database connection closed gracefully.");
+        logger.info("SQLite database connection closed gracefully");
       }
       resolve();
     });
@@ -211,7 +220,7 @@ process.on("SIGTERM", cleanup);
 
 if (isMain && STDIO_MODE) {
   runServer().catch((error) => {
-    console.error("Fatal error starting stdio MCP server:", error);
+    logger.fatal({ errMessage: error instanceof Error ? error.message : String(error) }, "Fatal error starting stdio MCP server");
   });
 }
 

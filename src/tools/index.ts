@@ -11,6 +11,7 @@ import {
     handleAddDatabaseRecord,
     handleUpdateDatabaseRecord,
 } from "./handlers.js";
+import { logger } from "../logging/logger.js";
 
 /**
  * Registers MCP tools with the server using injected Repository instances.
@@ -60,6 +61,6 @@ export function registerTools(
             }
         );
     } else {
-        console.error("Log: Running in READ_ONLY mode. Mutation tools (add, update) are disabled.");
+        logger.info({ readOnly: true }, "Running in READ_ONLY mode; mutation tools are not registered");
     }
 }
