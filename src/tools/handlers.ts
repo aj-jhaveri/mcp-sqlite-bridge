@@ -1,5 +1,6 @@
 import { IMetricsRepository } from "../db/repository.js";
 import { McpToolResponse, NewMetricRecord, UpdateMetricRecord, ServerConfig } from "../types/database.js";
+import { logger } from "../logging/logger.js";
 
 /**
  * Refusal returned by a mutation handler on a read-only server.
@@ -34,7 +35,7 @@ export async function handleQueryDataSource(
     args: { category: string }
 ): Promise<McpToolResponse> {
     const { category } = args;
-    console.error(`Log: Executing repository query for category: ${category}`);
+    logger.debug({ tool: "query_data_source", category }, "Executing repository query");
 
     try {
         const rows = await repo.queryByCategory(category);
@@ -50,7 +51,7 @@ export async function handleQueryDataSource(
         const msg = err instanceof Error ? err.message : String(err);
         // Driver text stays server-side. The consumer of this string is an LLM,
         // and SQLite errors can echo schema details and filesystem paths.
-        console.error("Database query operation failed:", msg);
+        logger.error({ tool: "query_data_source", errMessage: msg }, "Database query operation failed");
         return {
             content: [
                 {
@@ -75,11 +76,11 @@ export async function handleAddDatabaseRecord(
     config: ServerConfig
 ): Promise<McpToolResponse> {
     if (config.readOnly) {
-        console.error("Log: Refused add_database_record - server is read-only.");
+        logger.warn({ tool: "add_database_record" }, "Refused mutation: server is read-only");
         return readOnlyRefusal("insert a record");
     }
 
-    console.error(`Log: Executing repository write...`);
+    logger.debug({ tool: "add_database_record" }, "Executing repository write");
 
     try {
         const lastID = await repo.addRecord(args);
@@ -93,7 +94,7 @@ export async function handleAddDatabaseRecord(
         };
     } catch (err) {
         const msg = err instanceof Error ? err.message : String(err);
-        console.error("Database write operation failed:", msg);
+        logger.error({ tool: "add_database_record", errMessage: msg }, "Database write operation failed");
         return {
             content: [
                 {
@@ -117,12 +118,12 @@ export async function handleUpdateDatabaseRecord(
     config: ServerConfig
 ): Promise<McpToolResponse> {
     if (config.readOnly) {
-        console.error("Log: Refused update_database_record - server is read-only.");
+        logger.warn({ tool: "update_database_record" }, "Refused mutation: server is read-only");
         return readOnlyRefusal("update a record");
     }
 
     const { id } = args;
-    console.error(`Log: Executing repository update for ID ${id}...`);
+    logger.debug({ tool: "update_database_record", recordId: id }, "Executing repository update");
 
     // Verify if we have any fields to update (other than the ID parameter)
     const { category, key_name, status, detail_one, detail_two } = args;
@@ -167,7 +168,7 @@ export async function handleUpdateDatabaseRecord(
         };
     } catch (err) {
         const msg = err instanceof Error ? err.message : String(err);
-        console.error("Database update operation failed:", msg);
+        logger.error({ tool: "update_database_record", recordId: id, errMessage: msg }, "Database update operation failed");
         return {
             content: [
                 {
