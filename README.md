@@ -195,7 +195,18 @@ npm run dev
 ```
 
 ### 4. Automated Tests
-Run the comprehensive Vitest test suite, validating CRUD operations, Zod formatting, security boundaries, and HTTP JSON-RPC 2.0 endpoints:
+Run the Vitest suite — 57 tests across 5 files:
+
+| File | Covers |
+|---|---|
+| `tests/read-only-default.test.ts` | The fail-safe posture itself: every non-`"false"` value resolves to read-only |
+| `tests/security.test.ts` | Read-only tool exposure, the handler-level guard reached directly, SQL-injection payloads, and that driver error text never reaches the caller |
+| `tests/mcp-protocol.test.ts` | Protocol conformance over **both** transports against a real SDK client, including refusal of unadvertised write tools |
+| `tests/http.security.test.ts` | CORS allowlist (lookalike origins, preflight, `Vary`) and the per-IP rate limiter, mounted on a bare Express app |
+| `tests/server.test.ts` | CRUD paths, Zod error formatting, and failure handling |
+
+Every security claim in the section above is covered by at least one test that fails if the claim stops being true.
+
 ```bash
 npm test
 ```
