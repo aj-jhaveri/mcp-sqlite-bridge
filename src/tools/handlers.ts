@@ -1,5 +1,29 @@
 import { IMetricsRepository } from "../db/repository.js";
-import { McpToolResponse, NewMetricRecord, UpdateMetricRecord } from "../types/database.js";
+import { McpToolResponse, NewMetricRecord, UpdateMetricRecord, ServerConfig } from "../types/database.js";
+
+/**
+ * Refusal returned by a mutation handler on a read-only server.
+ *
+ * Registration in tools/index.ts is the primary gate: a read-only server never
+ * advertises these tools and the SDK rejects a direct call before any handler
+ * runs. This is the second lock. Registration is a single point of failure -
+ * one `server.tool(...)` accidentally placed outside the `if (!config.readOnly)`
+ * block, a plausible edit for someone adding a tool later, and writes are live
+ * with nothing else standing in the way.
+ */
+function readOnlyRefusal(action: string): McpToolResponse {
+    return {
+        content: [
+            {
+                type: "text",
+                text: `This server is running in read-only mode. Refusing to ${action}. ` +
+                      `No data was modified. Writes require the operator to start the ` +
+                      `server with READ_ONLY=false; this cannot be changed at call time.`,
+            },
+        ],
+        isError: true,
+    };
+}
 
 /**
  * Handles query_data_source tool execution.
@@ -24,12 +48,16 @@ export async function handleQueryDataSource(
         };
     } catch (err) {
         const msg = err instanceof Error ? err.message : String(err);
+        // Driver text stays server-side. The consumer of this string is an LLM,
+        // and SQLite errors can echo schema details and filesystem paths.
         console.error("Database query operation failed:", msg);
         return {
             content: [
                 {
                     type: "text",
-                    text: `Database error querying data source: ${msg}`,
+                    text: "The database could not be queried. No results were returned. " +
+                          "This is a server-side fault, not a problem with the arguments; " +
+                          "retrying the same call is unlikely to help.",
                 },
             ],
             isError: true,
@@ -43,8 +71,14 @@ export async function handleQueryDataSource(
  */
 export async function handleAddDatabaseRecord(
     repo: IMetricsRepository,
-    args: NewMetricRecord
+    args: NewMetricRecord,
+    config: ServerConfig
 ): Promise<McpToolResponse> {
+    if (config.readOnly) {
+        console.error("Log: Refused add_database_record - server is read-only.");
+        return readOnlyRefusal("insert a record");
+    }
+
     console.error(`Log: Executing repository write...`);
 
     try {
@@ -64,7 +98,8 @@ export async function handleAddDatabaseRecord(
             content: [
                 {
                     type: "text",
-                    text: `Database error adding record: ${msg}`,
+                    text: "The database rejected this write. No record was created. " +
+                          "Do not retry with identical arguments without changing them.",
                 },
             ],
             isError: true,
@@ -78,8 +113,14 @@ export async function handleAddDatabaseRecord(
  */
 export async function handleUpdateDatabaseRecord(
     repo: IMetricsRepository,
-    args: UpdateMetricRecord
+    args: UpdateMetricRecord,
+    config: ServerConfig
 ): Promise<McpToolResponse> {
+    if (config.readOnly) {
+        console.error("Log: Refused update_database_record - server is read-only.");
+        return readOnlyRefusal("update a record");
+    }
+
     const { id } = args;
     console.error(`Log: Executing repository update for ID ${id}...`);
 
@@ -131,7 +172,8 @@ export async function handleUpdateDatabaseRecord(
             content: [
                 {
                     type: "text",
-                    text: `Database error updating record: ${msg}`,
+                    text: `The database rejected the update to record ${id}. ` +
+                          "No fields were changed.",
                 },
             ],
             isError: true,
