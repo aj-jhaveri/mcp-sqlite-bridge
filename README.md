@@ -6,7 +6,11 @@
 [![CI](https://github.com/aj-jhaveri/mcp-sqlite-bridge/actions/workflows/ci.yml/badge.svg)](https://github.com/aj-jhaveri/mcp-sqlite-bridge/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
-A clean, modular Model Context Protocol (MCP) server that gives AI agents read-only access to local or remote SQLite databases by default, through type-safe, validated tools over both the **Stdio** and **Streamable HTTP** MCP transports. Any compliant MCP client — Claude Desktop over stdio, or an SDK client over HTTP — can connect, discover the tools, and call them.
+A clean, modular Model Context Protocol (MCP) server that gives AI agents
+read-only access to local or remote SQLite databases by default, through
+type-safe, validated tools over both the **Stdio** and **Streamable HTTP** MCP
+transports. Any compliant MCP client (Claude Desktop over stdio, or an SDK
+client over HTTP) can connect, discover the tools, and call them.
 
 **Live Web Demo:** [slakedesign.com/demo/mcp](https://slakedesign.com/demo/mcp)
 
@@ -41,7 +45,7 @@ graph TD
 
 ### Dual Transport Support
 - **Stdio Transport** (`STDIO=true`): Used by local desktop apps (Claude Desktop, Cursor) operating over `stdin`/`stdout`.
-- **Streamable HTTP Transport** (`POST /mcp`): The official MCP HTTP transport, served by the SDK's `StreamableHTTPServerTransport`. Runs **stateless** — a fresh server and transport are constructed per request, since the deploy target is a single instance on an ephemeral filesystem with nowhere to keep session state.
+- **Streamable HTTP Transport** (`POST /mcp`): The official MCP HTTP transport, served by the SDK's `StreamableHTTPServerTransport`. Runs **stateless**; a fresh server and transport are constructed per request, since the deploy target is a single instance on an ephemeral filesystem with nowhere to keep session state.
 
 Both transports are driven by the same tool registrations and the same read-only policy,
 and both are exercised against a real SDK client in CI (`tests/mcp-protocol.test.ts`).
@@ -79,9 +83,9 @@ When the LLM client receives this feedback, it identifies exactly which fields w
 Security is paramount when exposing data stores to autonomous agent operations:
 
 1. **SQL Injection Prevention:** Every query in the handlers is fully parameterized. Handlers bind raw client values strictly using SQLite parameter bindings (`?`), preventing malicious payloads from altering the SQL statement structure.
-2. **Access Control (`READ_ONLY` Mode):** Read-only is the **default**, not an opt-in, and it is enforced in two independent places. Mutation tools (`add_database_record`, `update_database_record`) are neither registered nor advertised in `tools/list` (`src/tools/index.ts`, `registerTools`), so a direct `tools/call` is rejected by the SDK's dispatch layer before any handler runs — the observed response is `MCP error -32602: Tool add_database_record not found`. The tool does not exist on a read-only server rather than existing and refusing. As defence in depth, both mutation handlers re-check `config.readOnly` and refuse independently of how they were reached (`src/tools/handlers.ts`). Writes require setting `READ_ONLY=false` deliberately; any other value — unset, empty, or misspelled — resolves to read-only (`src/config/security.ts`, `resolveReadOnly`), so a missing environment variable cannot silently unlock the database. Verified by `tests/security.test.ts` and `tests/mcp-protocol.test.ts`.
-3. **Cost controls on a public endpoint:** The HTTP transport is unauthenticated by design — any MCP client must be able to connect. Read-only means a caller cannot *change* anything; it does not mean a caller cannot *cost* anything, since every tool call reaches SQLite. `/mcp` is therefore bounded two ways: 60 requests/minute per IP, and 300/minute across all callers combined. Per-IP answers one flooder; the global ceiling answers many addresses each staying politely under it.
-4. **Explicit CORS allowlist:** Browser access is restricted to `CORS_ALLOWED_ORIGINS` rather than `*`, so an arbitrary web page cannot drive this server using a visitor's browser. Requests without an `Origin` header — curl, uptime monitors, every non-browser MCP client — pass through untouched.
+2. **Access Control (`READ_ONLY` Mode):** Read-only is the **default**, not an opt-in, and it is enforced in two independent places. Mutation tools (`add_database_record`, `update_database_record`) are neither registered nor advertised in `tools/list` (`src/tools/index.ts`, `registerTools`), so a direct `tools/call` is rejected by the SDK's dispatch layer before any handler runs (the observed response is `MCP error -32602: Tool add_database_record not found`. The tool does not exist on a read-only server rather than existing and refusing. As defence in depth, both mutation handlers re-check `config.readOnly` and refuse independently of how they were reached (`src/tools/handlers.ts`). Writes require setting `READ_ONLY=false` deliberately; any other value) unset, empty, or misspelled, resolves to read-only (`src/config/security.ts`, `resolveReadOnly`), so a missing environment variable cannot silently unlock the database. Verified by `tests/security.test.ts` and `tests/mcp-protocol.test.ts`.
+3. **Cost controls on a public endpoint:** The HTTP transport is unauthenticated by design, any MCP client must be able to connect. Read-only means a caller cannot *change* anything; it does not mean a caller cannot *cost* anything, since every tool call reaches SQLite. `/mcp` is therefore bounded two ways: 60 requests/minute per IP, and 300/minute across all callers combined. Per-IP answers one flooder; the global ceiling answers many addresses each staying politely under it.
+4. **Explicit CORS allowlist:** Browser access is restricted to `CORS_ALLOWED_ORIGINS` rather than `*`, so an arbitrary web page cannot drive this server using a visitor's browser. Requests without an `Origin` header (curl, uptime monitors, every non-browser MCP client) pass through untouched.
 5. **Local Sovereignty & Transport Flexibility:** Operates over local `Stdio` or an HTTP endpoint. Do not set `READ_ONLY=false` on a publicly reachable instance.
 
 ---
@@ -96,10 +100,10 @@ any other MCP server.
 ```bash
 npm run build
 
-# stdio — launches dist/server.js as a subprocess, exactly as Claude Desktop does
+# stdio: launches dist/server.js as a subprocess, exactly as Claude Desktop does
 npm run client
 
-# Streamable HTTP — against a running server
+# Streamable HTTP: against a running server
 npm start &
 npm run client -- --http
 
@@ -133,10 +137,10 @@ curl http://localhost:3000/health
 # → {"status":"HEALTHY","timestamp":"...","service":"mcp-sqlite-bridge","readOnly":true}
 ```
 
-`/health` is a plain operational endpoint, deliberately not an MCP call: asking whether
-the service is up should not require a protocol handshake that would itself fail when
-the answer is no. Every other interaction goes through `/mcp` — see the client section
-above.
+`/health` is a plain operational endpoint, deliberately not an MCP call:
+asking whether the service is up should not require a protocol handshake that
+would itself fail when the answer is no. Every other interaction goes through
+`/mcp`, see the client section above.
 
 ---
 
@@ -195,7 +199,7 @@ npm run dev
 ```
 
 ### 4. Automated Tests
-Run the Vitest suite — 57 tests across 5 files:
+Run the Vitest suite, 57 tests across 5 files:
 
 | File | Covers |
 |---|---|
@@ -217,27 +221,28 @@ npm test
 
 **Production-shaped.** Read-only by default, failing safe: any value but an
 explicit `READ_ONLY=false` resolves to read-only, and write access is enforced
-twice — mutation tools are never registered, and both handlers re-check
+twice: mutation tools are never registered, and both handlers re-check
 independently of how they were reached. Every query is parameterised and every
 tool argument is Zod-validated at the protocol boundary. Internal error text
 never reaches the caller. Structured logging pinned to stderr so it cannot
-corrupt the stdio JSON-RPC channel, with correlation IDs on the HTTP transport.
-Protocol conformance is tested against a real SDK client over **both** transports.
+corrupt the stdio JSON-RPC channel, with correlation IDs on the HTTP
+transport. Protocol conformance is tested against a real SDK client over
+**both** transports.
 
-**Demo-only, and why.** The HTTP endpoint is unauthenticated by design, because
-any MCP client must be able to connect — which is safe only because of the
-read-only default. The data is seeded fixture data about a fictional company.
-Storage is ephemeral. There are no query timeouts or connection pooling: a
-single local SQLite file with a bounded dataset does not need them.
+**Demo-only, and why.** The HTTP endpoint is unauthenticated by design,
+because any MCP client must be able to connect, which is safe only because of
+the read-only default. The data is seeded fixture data about a fictional
+company. Storage is ephemeral. There are no query timeouts or connection
+pooling: a single local SQLite file with a bounded dataset does not need them.
 
 **What was fixed, and what it taught me.** See [HARDENING.md](HARDENING.md).
-The worst defect was not in the code — it was a README claiming a security
+The worst defect was not in the code; it was a README claiming a security
 payload (`MCP_SECURITY_VIOLATION`) that existed nowhere in the codebase, while
-the real behaviour was arguably better than the invented one. That is the lesson
-that generalised: documentation is part of the system contract, and an unbacked
-claim is a defect even when the code underneath is sound. Every security claim
-in this README now names the file that enforces it and the test that fails if it
-stops being true.
+the real behaviour was arguably better than the invented one. That is the
+lesson that generalised: documentation is part of the system contract, and an
+unbacked claim is a defect even when the code underneath is sound. Every
+security claim in this README now names the file that enforces it and the test
+that fails if it stops being true.
 
 ---
 

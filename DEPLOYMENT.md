@@ -5,9 +5,9 @@
 | | |
 |---|---|
 | Host | Render (web service, Oregon, `starter` plan) |
-| Service | `slake-mcp-server` — `srv-d9rnmv2fngtc73dqkspg` |
+| Service | `slake-mcp-server`, `srv-d9rnmv2fngtc73dqkspg` |
 | URL | https://slake-mcp-server.onrender.com |
-| Repo / branch | `aj-jhaveri/mcp-sqlite-bridge` — `main` |
+| Repo / branch | `aj-jhaveri/mcp-sqlite-bridge`, `main` |
 | Auto-deploy | **on**, triggered per commit to `main` |
 | Consumed by | `slakedesign.com/demo/mcp`, via the Netlify function `netlify/functions/mcp-demo.js`, which is a real MCP client speaking Streamable HTTP to `/mcp` |
 
@@ -20,18 +20,18 @@ Start:  npm start
 
 Every part is load-bearing. Do not simplify without reading this:
 
-- **`npm install --global npm@11.6.2`** — `package-lock.json` was written by
+- **`npm install --global npm@11.6.2`**; `package-lock.json` was written by
   npm 11.6.2, and Node 22.12.0 (pinned in `.nvmrc`) bundles npm 10.9.0. The two
   disagree about optional transitives of `@napi-rs/wasm-runtime`, and `npm ci`
   fails with `Missing: @emnapi/runtime from lock file`. This is the same pin
   `.github/workflows/ci.yml` applies, for the same reason.
-- **`npm ci --include=dev`** — Render can set `NODE_ENV=production`, which makes
+- **`npm ci --include=dev`**; Render can set `NODE_ENV=production`, which makes
   npm set `omit=dev` and strip `devDependencies`. `typescript` lives there and is
   exactly what `tsc` needs. `npm ci` rather than `npm install` so the build fails
   on lockfile drift instead of silently resolving a different tree.
-- **`npm run build`** — `npm start` runs `node dist/server.js`; without this
+- **`npm run build`**, `npm start` runs `node dist/server.js`; without this
   there is no `dist/`.
-- **`npm prune --omit=dev`** — strips build-only dependencies from the running
+- **`npm prune --omit=dev`**, strips build-only dependencies from the running
   image. Measured on the 2026-08-29 deploy: 278 packages after install, 197
   after prune.
 
@@ -43,9 +43,9 @@ hardcoding it. It survives the prune because it is a production dependency.
 ### The fragility this replaced
 
 Until 2026-08-29 the build command was `npm install && npm run build`, with no
-`--include=dev` and no prune. It worked **only** because `NODE_ENV` was not set
-to `production` on this service. Setting that variable — an entirely reasonable
-thing for an operator to do — would have broken the build.
+`--include=dev` and no prune. It worked **only** because `NODE_ENV` was not
+set to `production` on this service. Setting that variable (an entirely
+reasonable thing for an operator to do) would have broken the build.
 
 Reproduced in a clean clone before changing anything:
 
@@ -63,11 +63,11 @@ running production image. The current command fixes both problems.
 |---|:---:|---|---|
 | `READ_ONLY` | no | *(read-only)* | **Leave unset.** Read-only is the default and fails safe: any value except the exact string `"false"` resolves to read-only. This is the control that makes a public unauthenticated endpoint safe. Do **not** set `READ_ONLY=false` on a publicly reachable instance. |
 | `PORT` | no | `3000` | Set by Render. |
-| `DB_PATH` | no | `<repo>/mcp_database.db` | Ephemeral on Render — writes do not survive a restart. |
+| `DB_PATH` | no | `<repo>/mcp_database.db` | Ephemeral on Render; writes do not survive a restart. |
 | `CORS_ALLOWED_ORIGINS` | no | `https://slakedesign.com,https://www.slakedesign.com` | Comma-separated allowlist. A `*` entry is discarded rather than honoured. |
 | `STDIO` | no | unset | `"true"` switches to the stdio transport and binds no port. Never set on the HTTP deployment. |
 | `LOG_LEVEL` | no | `info` | |
-| `NODE_ENV` | no | unset | Safe to set to `production` as of 2026-08-29 — the build command now passes `--include=dev`, so stripping devDependencies no longer breaks `tsc`. Before that it would have. |
+| `NODE_ENV` | no | unset | Safe to set to `production` as of 2026-08-29, the build command now passes `--include=dev`, so stripping devDependencies no longer breaks `tsc`. Before that it would have. |
 
 ## Deploying
 
@@ -82,11 +82,11 @@ signal only the new build emits rather than trusting the deploy status.
 
 ## Rollback
 
-1. **Redeploy the last good version** — Render's dashboard lists prior deploys
+1. **Redeploy the last good version**, Render's dashboard lists prior deploys
    with a rollback action; `render deploys create <srv-id> --commit <sha>`.
-2. **Revert the commit** — `git revert -m 1 <merge-sha>`, push, let auto-deploy
+2. **Revert the commit**, `git revert -m 1 <merge-sha>`, push, let auto-deploy
    carry it.
-3. **Last resort** — disable the demo link on `slakedesign.com/demo`.
+3. **Last resort**, disable the demo link on `slakedesign.com/demo`.
 
 A failed build is self-rollbacking: Render keeps the previous version live and
 never routes traffic to a build that did not start.
@@ -109,8 +109,8 @@ Introduced by the P3/P4 work deployed 2026-08-28:
 - **Responses carry `x-correlation-id`**, accepted from the request or
   generated per request.
 - **Importing `src/server.ts` no longer binds a port.** The listener is gated
-  on the entrypoint check, so the demo and tests can import the module. The
-  deployed service is unaffected — it runs the file as the process entrypoint.
+on the entrypoint check, so the demo and tests can import the module. The
+deployed service is unaffected, it runs the file as the process entrypoint.
 
 ## Smoke test after deploy
 
