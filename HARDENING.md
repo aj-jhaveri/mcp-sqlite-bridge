@@ -131,19 +131,39 @@ human-facing CLI demo whose output is its product.
 
 ---
 
-## What is still demo-grade, deliberately
+## Architectural trade-offs and known gaps
 
-- **No authentication on the HTTP transport.** By design, any MCP client must
-  be able to connect. This is safe *only* because of the read-only default. Do
-  not set `READ_ONLY=false` on a publicly reachable instance.
+Kept separate on purpose. The first group are choices made knowingly, with a
+reason. The second are risks that exist and have not been addressed. Filing the
+second under the first would be the kind of framing this repository's audit
+removed.
+
+### Deliberate trade-offs
+
+- **No authentication on the HTTP transport.** By design: any MCP client must be
+  able to connect, which is the entire point of exposing a protocol-compliant
+  endpoint publicly. This is safe *only* because of the read-only default, and
+  the two decisions have to be understood together. Do not set
+  `READ_ONLY=false` on a publicly reachable instance.
 - **Seeded fixture data** about a fictional company, not a production dataset.
+  The demo's value is the protocol and the guardrails, not the rows.
 - **Ephemeral storage.** Writes made with `READ_ONLY=false` do not survive a
-  restart.
+  restart. Acceptable because writes exist to demonstrate the mutation path, not
+  to persist anything.
 - **No query timeouts or connection pooling.** A single local SQLite file with a
-  bounded fixture dataset does not need them; a real deployment would.
+  bounded fixture dataset does not need them. A real deployment would, and the
+  repository interface is where they would go.
+
+### Known gaps
+
 - **`src/middleware/error-handler.ts` monkey-patches an SDK method** to reformat
-  Zod errors into agent-readable strings. It is isolated and commented, but it
-  reaches into `server.server` and could break on an SDK upgrade.
+  Zod errors into agent-readable strings. It reaches into `server.server`, which
+  is internal, so an SDK upgrade could break it silently. It is isolated and
+  commented, but it is a genuine fragility rather than a considered trade-off,
+  and the honest fix is for the SDK to expose a formatting hook.
+- **`@types/sqlite3` is declared as a production dependency** rather than a dev
+  one. It survives `npm prune --omit=dev` and ships in the running image for no
+  reason. Harmless, and wrong.
 
 ---
 
