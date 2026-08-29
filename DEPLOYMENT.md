@@ -14,25 +14,48 @@
 ## Build and start commands
 
 ```
-Build:  npm install && npm run build
+Build:  npm install --global npm@11.6.2 && npm ci --include=dev && npm run build && npm prune --omit=dev
 Start:  npm start
 ```
 
-**This build command is fragile in one specific way, and it is worth knowing
-before someone "tidies up" the environment.** `typescript` is a
-`devDependency`. The command works only because `NODE_ENV` is *not* set to
-`production` on this service — if it were, npm would set `omit=dev`, strip
-`typescript`, and `tsc` would fail with dozens of missing-module errors.
+Every part is load-bearing. Do not simplify without reading this:
 
-The sibling `task-queue-system` and `slakedesign-rag` services both set
-`NODE_ENV=production` and therefore use
-`npm ci --include=dev && npm run build && npm prune --omit=dev`. If you ever add
-`NODE_ENV=production` here, change the build command in the same action.
+- **`npm install --global npm@11.6.2`** — `package-lock.json` was written by
+  npm 11.6.2, and Node 22.12.0 (pinned in `.nvmrc`) bundles npm 10.9.0. The two
+  disagree about optional transitives of `@napi-rs/wasm-runtime`, and `npm ci`
+  fails with `Missing: @emnapi/runtime from lock file`. This is the same pin
+  `.github/workflows/ci.yml` applies, for the same reason.
+- **`npm ci --include=dev`** — Render can set `NODE_ENV=production`, which makes
+  npm set `omit=dev` and strip `devDependencies`. `typescript` lives there and is
+  exactly what `tsc` needs. `npm ci` rather than `npm install` so the build fails
+  on lockfile drift instead of silently resolving a different tree.
+- **`npm run build`** — `npm start` runs `node dist/server.js`; without this
+  there is no `dist/`.
+- **`npm prune --omit=dev`** — strips build-only dependencies from the running
+  image. Measured on the 2026-08-29 deploy: 278 packages after install, 197
+  after prune.
 
 `postinstall` runs `npm rebuild sqlite3 --build-from-source`. `sqlite3` is a
-native module built per Node major version, which is why `.nvmrc` and
-`engines` both pin `22.12.0` and why the CI workflow reads the version from
-`.nvmrc` rather than hardcoding it.
+native module built per Node major version, which is why `.nvmrc` and `engines`
+both pin `22.12.0` and why CI reads the version from `.nvmrc` rather than
+hardcoding it. It survives the prune because it is a production dependency.
+
+### The fragility this replaced
+
+Until 2026-08-29 the build command was `npm install && npm run build`, with no
+`--include=dev` and no prune. It worked **only** because `NODE_ENV` was not set
+to `production` on this service. Setting that variable — an entirely reasonable
+thing for an operator to do — would have broken the build.
+
+Reproduced in a clean clone before changing anything:
+
+```
+$ NODE_ENV=production npm install && npm run build
+sh: tsc: command not found
+```
+
+It also meant `typescript`, `vitest`, `tsx` and `supertest` shipped in the
+running production image. The current command fixes both problems.
 
 ## Environment variables
 
@@ -44,7 +67,7 @@ native module built per Node major version, which is why `.nvmrc` and
 | `CORS_ALLOWED_ORIGINS` | no | `https://slakedesign.com,https://www.slakedesign.com` | Comma-separated allowlist. A `*` entry is discarded rather than honoured. |
 | `STDIO` | no | unset | `"true"` switches to the stdio transport and binds no port. Never set on the HTTP deployment. |
 | `LOG_LEVEL` | no | `info` | |
-| `NODE_ENV` | no | unset | See the build-command warning above. |
+| `NODE_ENV` | no | unset | Safe to set to `production` as of 2026-08-29 — the build command now passes `--include=dev`, so stripping devDependencies no longer breaks `tsc`. Before that it would have. |
 
 ## Deploying
 

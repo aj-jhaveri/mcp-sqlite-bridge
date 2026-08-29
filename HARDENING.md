@@ -159,15 +159,43 @@ live service and through the Netlify proxy the demo page actually uses:
 Streamable HTTP handshake completes; `tools/list` advertises exactly
 `["query_data_source"]` with neither mutation tool present.
 
-**One latent fragility found while writing the runbook**, not caused by this
-work but worth recording: the build command is `npm install && npm run build`
-with no `--include=dev`, and `typescript` is a `devDependency`. It works only
-because `NODE_ENV` is not set to `production` on this service. Setting that
-variable — an entirely reasonable thing for someone to do — would break the
-build. The sibling repos hit exactly this and use
-`npm ci --include=dev && … && npm prune --omit=dev`. Documented rather than
-changed, because changing a working build command during a rollout is the wrong
-time to find out something else depended on it.
+**One latent fragility was found while writing the runbook, and has since been
+fixed.** The build command was `npm install && npm run build` with no
+`--include=dev`, and `typescript` is a `devDependency`. It worked only because
+`NODE_ENV` was not set to `production` on this service — setting that variable,
+an entirely reasonable operator action, would have broken the build. It was
+documented rather than changed at the time, on the grounds that a rollout is the
+wrong moment to alter a working build command.
+
+That was the right call for that moment and the wrong state to leave behind. It
+was fixed on 2026-08-29, verified in a clean clone first:
+
+```
+$ NODE_ENV=production npm install && npm run build
+sh: tsc: command not found          # the fragility, reproduced
+
+$ NODE_ENV=production npm ci --include=dev && npm run build && npm prune --omit=dev
+                                    # OK; dist/ produced, sqlite3 and pino kept,
+                                    # typescript removed
+```
+
+The pruned production tree was then started and exercised before the config was
+touched: `/health` returned `readOnly: true`, the Streamable HTTP handshake
+completed, and logs were structured Pino on stderr.
+
+**A correction worth recording, because it nearly caused a wrong fix.** The
+first local attempt at `npm ci` failed with `Missing: @emnapi/runtime from lock
+file`, which looked like a defective committed lockfile — and regenerating it
+locally did make the error go away. That would have been the wrong change. MCP's
+CI runs `npm ci` on Linux with `npm@11.6.2` and passes consistently, so the
+lockfile is correct for the platform that matters; the failure was a macOS-ARM
+resolution artifact. Committing a macOS-regenerated lockfile would have risked
+breaking Linux CI to fix a problem that only existed on a laptop. The actual fix
+was the npm pin the CI workflow already used.
+
+**Measured benefit beyond the fragility:** the prune strips build-only
+dependencies from the running image — 278 packages after install, 197 after
+prune on the 2026-08-29 deploy.
 
 **What to monitor.** `tools/list` must never advertise a mutation tool; that is
 the single check that proves the read-only posture is intact end to end, and it
