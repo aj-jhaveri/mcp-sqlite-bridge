@@ -91,7 +91,7 @@ signal only the new build emits rather than trusting the deploy status.
 A failed build is self-rollbacking: Render keeps the previous version live and
 never routes traffic to a build that did not start.
 
-## Known behavioural changes
+## Known behavioral changes
 
 Introduced by the P3/P4 work deployed 2026-08-28:
 
