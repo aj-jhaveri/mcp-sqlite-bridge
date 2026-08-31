@@ -89,7 +89,18 @@ describe("MCP protocol conformance — stdio transport", () => {
         expect(result.isError).toBe(true);
         const text = (result.content as Array<{ type: string; text?: string }>)
             .filter(b => b.type === "text").map(b => b.text).join("");
-        expect(text).toContain("not found");
+
+        // Pinned to the exact string, not a substring. README.md, HARDENING.md and
+        // docs/architecture.md all quote this response verbatim as the observed
+        // read-only behavior; if the SDK ever reworded or recoded it, those three
+        // documents would silently become wrong. This assertion is what makes that
+        // a build failure instead.
+        //
+        // The string is therefore coupled to the installed @modelcontextprotocol/sdk
+        // version. If you bump that dependency and this assertion fails, the SDK
+        // changed its dispatch message: update those three documents to match rather
+        // than loosening this back to a substring.
+        expect(text).toBe("MCP error -32602: Tool add_database_record not found");
     });
 });
 

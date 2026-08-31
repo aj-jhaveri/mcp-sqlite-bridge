@@ -16,11 +16,16 @@ client over HTTP) can connect, discover the tools, and call them.
 
 ---
 
-## Why MCP Matters
+## Documentation as a Contract
 
-Large Language Models (LLMs) are powerful reasoners but lack access to dynamic, real-time private data. The **Model Context Protocol (MCP)**, open-sourced by Anthropic, establishes a standardized bilateral protocol enabling AI agents to interact with data sources, local filesystems, and developer environments. 
-
-Rather than engineering monolithic API integrations for every custom application, developers expose resources and tools via MCP. Standardized clients (such as Claude Desktop or remote web applications) instantly discover these tools, enabling agents to retrieve context, call functions, and inspect system environments dynamically, safely, and predictably.
+The worst defect was not in the code; it was a README claiming a security
+payload (`MCP_SECURITY_VIOLATION`) that existed nowhere in the codebase, while
+the real behavior was arguably better than the invented one. That is the
+lesson that generalized: documentation is part of the system contract, and an
+unbacked claim is a defect even when the code underneath is sound. Every
+security claim in this README now names the file that enforces it and the test
+that fails if it stops being true. See [HARDENING.md](HARDENING.md) for what
+was fixed.
 
 ---
 
@@ -82,11 +87,11 @@ When the LLM client receives this feedback, it identifies exactly which fields w
 
 Security is paramount when exposing data stores to autonomous agent operations:
 
-1. **SQL Injection Prevention:** Every query in the handlers is fully parameterized. Handlers bind raw client values strictly using SQLite parameter bindings (`?`), preventing malicious payloads from altering the SQL statement structure.
-2. **Access Control (`READ_ONLY` Mode):** Read-only is the **default**, not an opt-in, and it is enforced in two independent places. Mutation tools (`add_database_record`, `update_database_record`) are neither registered nor advertised in `tools/list` (`src/tools/index.ts`, `registerTools`), so a direct `tools/call` is rejected by the SDK's dispatch layer before any handler runs (the observed response is `MCP error -32602: Tool add_database_record not found`. The tool does not exist on a read-only server rather than existing and refusing. As defence in depth, both mutation handlers re-check `config.readOnly` and refuse independently of how they were reached (`src/tools/handlers.ts`). Writes require setting `READ_ONLY=false` deliberately; any other value) unset, empty, or misspelled, resolves to read-only (`src/config/security.ts`, `resolveReadOnly`), so a missing environment variable cannot silently unlock the database. Verified by `tests/security.test.ts` and `tests/mcp-protocol.test.ts`.
-3. **Cost controls on a public endpoint:** The HTTP transport is unauthenticated by design, any MCP client must be able to connect. Read-only means a caller cannot *change* anything; it does not mean a caller cannot *cost* anything, since every tool call reaches SQLite. `/mcp` is therefore bounded two ways: 60 requests/minute per IP, and 300/minute across all callers combined. Per-IP answers one flooder; the global ceiling answers many addresses each staying politely under it.
-4. **Explicit CORS allowlist:** Browser access is restricted to `CORS_ALLOWED_ORIGINS` rather than `*`, so an arbitrary web page cannot drive this server using a visitor's browser. Requests without an `Origin` header (curl, uptime monitors, every non-browser MCP client) pass through untouched.
-5. **Local Sovereignty & Transport Flexibility:** Operates over local `Stdio` or an HTTP endpoint. Do not set `READ_ONLY=false` on a publicly reachable instance.
+1. **SQL Injection Prevention:** Every query binds raw client values as SQLite parameters (`?`) rather than interpolating them, so a payload cannot alter the statement structure (`src/db/repository.ts`). Tool arguments are Zod-validated at the protocol boundary before they reach it (`src/tools/schemas.ts`). Verified by `tests/security.test.ts`.
+2. **Access Control (`READ_ONLY` Mode):** Read-only is the **default**, not an opt-in, and it is enforced in two independent places. Mutation tools (`add_database_record`, `update_database_record`) are neither registered nor advertised in `tools/list` (`src/tools/index.ts`, `registerTools`), so a direct `tools/call` is rejected by the SDK's dispatch layer before any handler runs; the observed response is `MCP error -32602: Tool add_database_record not found`. The tool does not exist on a read-only server rather than existing and refusing. As defense in depth, both mutation handlers re-check `config.readOnly` and refuse independently of how they were reached (`src/tools/handlers.ts`). Writes require setting `READ_ONLY=false` deliberately: any other value, whether unset, empty, or misspelled, resolves to read-only (`src/config/security.ts`, `resolveReadOnly`, pinned by `tests/read-only-default.test.ts`), so a missing environment variable cannot silently unlock the database. Verified by `tests/security.test.ts` and `tests/mcp-protocol.test.ts`.
+3. **Cost controls on a public endpoint:** The HTTP transport is unauthenticated by design, any MCP client must be able to connect. Read-only means a caller cannot *change* anything; it does not mean a caller cannot *cost* anything, since every tool call reaches SQLite. `/mcp` is therefore bounded two ways: 60 requests/minute per IP, and 300/minute across all callers combined (`src/middleware/http.security.ts`, `PER_IP_LIMIT` and `GLOBAL_LIMIT`). Per-IP answers one flooder; the global ceiling answers many addresses each staying politely under it. Verified by `tests/http.security.test.ts`, which reads those constants rather than restating the numbers.
+4. **Explicit CORS allowlist:** Browser access is restricted to `CORS_ALLOWED_ORIGINS` rather than `*`, so an arbitrary web page cannot drive this server using a visitor's browser (`src/middleware/http.security.ts`, `parseAllowedOrigins` and `corsMiddleware`; a `*` entry is dropped rather than accepted). Requests without an `Origin` header (curl, uptime monitors, every non-browser MCP client) pass through untouched. Verified by `tests/http.security.test.ts`.
+5. **Local Sovereignty & Transport Flexibility:** Operates over local `Stdio` or an HTTP endpoint, exposing the same tool surface on both (`src/server.ts`). Verified by `tests/mcp-protocol.test.ts`, which runs the conformance suite against a real SDK client over each transport. Do not set `READ_ONLY=false` on a publicly reachable instance: that is an operational rule, not something the code can enforce on your behalf.
 
 ---
 
@@ -222,7 +227,7 @@ npm test
 **Production-shaped.** Read-only by default, failing safe: any value but an
 explicit `READ_ONLY=false` resolves to read-only, and write access is enforced
 twice: mutation tools are never registered, and both handlers re-check
-independently of how they were reached. Every query is parameterised and every
+independently of how they were reached. Every query is parameterized and every
 tool argument is Zod-validated at the protocol boundary. Internal error text
 never reaches the caller. Structured logging pinned to stderr so it cannot
 corrupt the stdio JSON-RPC channel, with correlation IDs on the HTTP
@@ -234,15 +239,6 @@ because any MCP client must be able to connect, which is safe only because of
 the read-only default. The data is seeded fixture data about a fictional
 company. Storage is ephemeral. There are no query timeouts or connection
 pooling: a single local SQLite file with a bounded dataset does not need them.
-
-**What was fixed, and what it taught me.** See [HARDENING.md](HARDENING.md).
-The worst defect was not in the code; it was a README claiming a security
-payload (`MCP_SECURITY_VIOLATION`) that existed nowhere in the codebase, while
-the real behaviour was arguably better than the invented one. That is the
-lesson that generalised: documentation is part of the system contract, and an
-unbacked claim is a defect even when the code underneath is sound. Every
-security claim in this README now names the file that enforces it and the test
-that fails if it stops being true.
 
 ---
 

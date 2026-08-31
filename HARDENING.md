@@ -12,7 +12,7 @@ they were not.
 `README.md` claimed that calls to disabled mutation tools "return an explicit
 security payload (`MCP_SECURITY_VIOLATION`)".
 
-That string existed nowhere in the codebase. The real behaviour, observed by
+That string existed nowhere in the codebase. The real behavior, observed by
 running the demo against a read-only server, is the SDK's generic dispatch
 error:
 
@@ -20,7 +20,7 @@ error:
 MCP error -32602: Tool add_database_record not found
 ```
 
-The actual behaviour is arguably *better* than the invented one (the tool does
+The actual behavior is arguably *better* than the invented one (the tool does
 not exist on a read-only server rather than existing and refusing), which is
 what makes the fabrication so pointless. A security claim the code does not
 implement is worse than no claim: it invites a reader to trust the rest of the
