@@ -3,8 +3,13 @@ import express from "express";
 import request from "supertest";
 import {
     corsMiddleware,
+    createGlobalLimiter,
+    createPerIpLimiter,
     parseAllowedOrigins,
-    perIpLimiter,
+    GLOBAL_LIMIT,
+    GLOBAL_MESSAGE,
+    PER_IP_LIMIT,
+    PER_IP_MESSAGE,
 } from "../src/middleware/http.security.js";
 
 /**
@@ -21,6 +26,13 @@ import {
  */
 
 const ALLOWED = ["https://slakedesign.com", "https://www.slakedesign.com"];
+
+function appWithLimiter(limiter: express.RequestHandler) {
+    const app = express();
+    app.use(limiter);
+    app.get("/probe", (_req, res) => { res.json({ ok: true }); });
+    return app;
+}
 
 function appWithCors() {
     const app = express();
@@ -112,31 +124,57 @@ describe("corsMiddleware", () => {
 });
 
 describe("perIpLimiter", () => {
-    it("allows traffic under the limit and returns the documented body once exceeded", async () => {
-        const app = express();
-        app.use(perIpLimiter);
-        app.get("/probe", (_req, res) => { res.json({ ok: true }); });
+    it("allows traffic up to the limit and returns the documented body once exceeded", async () => {
+        // A fresh limiter per test. The exported singleton the server mounts keeps its
+        // counter for the life of the process, so exhausting that one here would leave
+        // every later request in this file rate limited.
+        const app = appWithLimiter(createPerIpLimiter());
 
-        // The limiter is 60/minute. Walk up to the ceiling, then past it.
-        let lastOk = 0;
-        for (let i = 0; i < 60; i++) {
+        let served = 0;
+        for (let i = 0; i < PER_IP_LIMIT; i++) {
             const res = await request(app).get("/probe");
-            if (res.status === 200) lastOk += 1;
+            if (res.status === 200) served += 1;
         }
-        expect(lastOk).toBe(60);
+        expect(served).toBe(PER_IP_LIMIT);
 
         const limited = await request(app).get("/probe");
         expect(limited.status).toBe(429);
-        expect(limited.body).toEqual({ error: "Too many requests. Please slow down." });
-    });
+        expect(limited.body).toEqual(PER_IP_MESSAGE);
+    }, 30000);
 
-    it("advertises draft-7 standard rate limit headers", async () => {
-        const app = express();
-        app.use(perIpLimiter);
-        app.get("/probe", (_req, res) => { res.json({ ok: true }); });
+    it("advertises draft-7 standard rate limit headers on a served request", async () => {
+        const app = appWithLimiter(createPerIpLimiter());
 
         const res = await request(app).get("/probe");
+        // Asserted on a 200: these headers are present on a 429 too, so sharing an
+        // exhausted limiter would have made this pass without observing the case
+        // that matters.
+        expect(res.status).toBe(200);
         expect(res.headers["ratelimit"] ?? res.headers["ratelimit-limit"]).toBeDefined();
         expect(res.headers["x-ratelimit-limit"]).toBeUndefined();
+    });
+});
+
+describe("globalLimiter", () => {
+    it("bounds total traffic and returns the documented body at capacity", async () => {
+        // Every request shares one bucket by construction: the key generator is a
+        // constant, so this ceiling applies across all callers rather than per address.
+        const app = appWithLimiter(createGlobalLimiter());
+
+        let served = 0;
+        for (let i = 0; i < GLOBAL_LIMIT; i++) {
+            const res = await request(app).get("/probe");
+            if (res.status === 200) served += 1;
+        }
+        expect(served).toBe(GLOBAL_LIMIT);
+
+        const limited = await request(app).get("/probe");
+        expect(limited.status).toBe(429);
+        expect(limited.body).toEqual(GLOBAL_MESSAGE);
+    }, 60000);
+
+    it("sits above the per-IP ceiling, so the per-IP limit stays reachable", () => {
+        // If these ever cross, one caller could never reach its own documented limit.
+        expect(GLOBAL_LIMIT).toBeGreaterThan(PER_IP_LIMIT);
     });
 });

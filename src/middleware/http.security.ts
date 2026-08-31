@@ -70,17 +70,38 @@ export function corsMiddleware(allowedOrigins: string[]) {
 }
 
 /**
+ * Rate limit ceilings.
+ *
+ * Exported as named constants because these numbers are stated in three places -
+ * this middleware, the tests that assert them, and the Security Model section of
+ * the README. Three literals drift independently; one constant does not.
+ */
+export const RATE_LIMIT_WINDOW_MS = 60_000;
+export const PER_IP_LIMIT = 60;
+export const GLOBAL_LIMIT = 300;
+
+export const PER_IP_MESSAGE = { error: "Too many requests. Please slow down." };
+export const GLOBAL_MESSAGE = { error: "Server is at capacity. Please retry shortly." };
+
+/**
  * Per-IP ceiling. A protocol session is initialize + call, so a single legitimate
  * client interaction costs two requests; 60/minute leaves room for an agent working
  * through several tools while bounding a caller looping the endpoint.
+ *
+ * Built by a factory so a test can take a fresh bucket. The exported singleton below
+ * is what the server mounts, and its counter is process-wide: a test that exhausts it
+ * to prove the ceiling would leave every later request in the same process rate
+ * limited, which surfaces later as an order-dependent failure somewhere unrelated.
  */
-export const perIpLimiter = rateLimit({
-    windowMs: 60_000,
-    limit: 60,
-    standardHeaders: "draft-7",
-    legacyHeaders: false,
-    message: { error: "Too many requests. Please slow down." },
-});
+export function createPerIpLimiter() {
+    return rateLimit({
+        windowMs: RATE_LIMIT_WINDOW_MS,
+        limit: PER_IP_LIMIT,
+        standardHeaders: "draft-7",
+        legacyHeaders: false,
+        message: PER_IP_MESSAGE,
+    });
+}
 
 /**
  * Global ceiling across all callers.
@@ -89,12 +110,17 @@ export const perIpLimiter = rateLimit({
  * politely under the individual cap. This is the bound on total cost regardless of
  * source. Single fixed bucket, so the key generator is deliberately constant.
  */
-export const globalLimiter = rateLimit({
-    windowMs: 60_000,
-    limit: 300,
-    standardHeaders: false,
-    legacyHeaders: false,
-    keyGenerator: () => "global",
-    validate: false,
-    message: { error: "Server is at capacity. Please retry shortly." },
-});
+export function createGlobalLimiter() {
+    return rateLimit({
+        windowMs: RATE_LIMIT_WINDOW_MS,
+        limit: GLOBAL_LIMIT,
+        standardHeaders: false,
+        legacyHeaders: false,
+        keyGenerator: () => "global",
+        validate: false,
+        message: GLOBAL_MESSAGE,
+    });
+}
+
+export const perIpLimiter = createPerIpLimiter();
+export const globalLimiter = createGlobalLimiter();
